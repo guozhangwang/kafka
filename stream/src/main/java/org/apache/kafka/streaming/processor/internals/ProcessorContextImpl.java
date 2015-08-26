@@ -89,6 +89,10 @@ public class ProcessorContextImpl implements ProcessorContext {
         this.initialized = false;
     }
 
+    public ProcessorStateManager stateManager() {
+        return this.stateMgr;
+    }
+
     public RecordCollector recordCollector() {
         return this.collector;
     }
@@ -214,7 +218,7 @@ public class ProcessorContextImpl implements ProcessorContext {
 
     @Override
     public void commit() {
-        task.commitOffset();
+        task.commit();
     }
 
     @Override
