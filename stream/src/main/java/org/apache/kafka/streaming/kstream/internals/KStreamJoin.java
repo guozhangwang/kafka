@@ -39,7 +39,7 @@ class KStreamJoin<K, V, V1, V2> implements ProcessorDef {
     private Processor processorForOtherStream = null;
     public final ProcessorDef processorDefForOtherStream = new ProcessorDef() {
         @Override
-        public Processor define() {
+        public Processor instance() {
             return processorForOtherStream;
         }
     };
@@ -52,7 +52,7 @@ class KStreamJoin<K, V, V1, V2> implements ProcessorDef {
     }
 
     @Override
-    public Processor define() {
+    public Processor instance() {
         return new KStreamJoinProcessor();
     }
 
