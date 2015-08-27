@@ -15,7 +15,7 @@
  * limitations under the License.
  */
 
-package org.apache.kafka.streaming;
+package org.apache.kafka.streaming.kstream.internals;
 
 import org.apache.kafka.common.serialization.IntegerDeserializer;
 import org.apache.kafka.common.serialization.StringDeserializer;
@@ -27,9 +27,11 @@ import org.apache.kafka.test.MockKStreamBuilder;
 import org.apache.kafka.test.MockProcessor;
 import org.junit.Test;
 
+import java.util.ArrayList;
+
 import static org.junit.Assert.assertEquals;
 
-public class KStreamMapValuesTest {
+public class KStreamFlatMapValuesTest {
 
     private String topicName = "topic";
 
@@ -40,32 +42,36 @@ public class KStreamMapValuesTest {
     @Test
     public void testFlatMapValues() {
 
-        ValueMapper<String, Integer> mapper =
-            new ValueMapper<String, Integer>() {
+        ValueMapper<String, Iterable<String>> mapper =
+            new ValueMapper<String, Iterable<String>>() {
                 @Override
-                public Integer apply(String value) {
-                    return value.length();
+                public Iterable<String> apply(String value) {
+                    ArrayList<String> result = new ArrayList<String>();
+                    result.add(value.toLowerCase());
+                    result.add(value);
+                    return result;
                 }
             };
 
-        final int[] expectedKeys = new int[]{1, 10, 100, 1000};
+        final int[] expectedKeys = new int[]{0, 1, 2, 3};
 
         KStream<Integer, String> stream;
-        MockProcessor<Integer, Integer> processor = new MockProcessor<>();
+        MockProcessor<Integer, String> processor;
+
+        processor = new MockProcessor<>();
         stream = topology.<Integer, String>from(keyDeserializer, valDeserializer, topicName);
-        stream.mapValues(mapper).process(processor);
+        stream.flatMapValues(mapper).process(processor);
 
         for (int i = 0; i < expectedKeys.length; i++) {
-            ((KStreamSource<Integer, String>) stream).source().process(expectedKeys[i], Integer.toString(expectedKeys[i]));
+            ((KStreamSource<Integer, String>) stream).source().process(expectedKeys[i], "V" + expectedKeys[i]);
         }
 
-        assertEquals(4, processor.processed.size());
+        assertEquals(8, processor.processed.size());
 
-        String[] expected = new String[]{"1:1", "10:2", "100:3", "1000:4"};
+        String[] expected = new String[]{"0:v0", "0:V0", "1:v1", "1:V1", "2:v2", "2:V2", "3:v3", "3:V3"};
 
         for (int i = 0; i < expected.length; i++) {
             assertEquals(expected[i], processor.processed.get(i));
         }
     }
-
 }
