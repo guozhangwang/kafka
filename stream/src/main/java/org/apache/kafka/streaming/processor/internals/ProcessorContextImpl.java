@@ -218,7 +218,7 @@ public class ProcessorContextImpl implements ProcessorContext {
 
     @Override
     public void commit() {
-        task.commit();
+        task.needCommit();
     }
 
     @Override
