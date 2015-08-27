@@ -36,7 +36,7 @@ import java.util.Iterator;
 import java.util.LinkedList;
 import java.util.Map;
 
-public class SlidingWindow<K, V> implements Window<K, V> {
+public class SlidingWindowDef<K, V> implements WindowDef<K, V> {
     private String name;
     private final long duration;
     private final int maxCount;
@@ -45,7 +45,7 @@ public class SlidingWindow<K, V> implements Window<K, V> {
     private final Deserializer<K> keyDeserializer;
     private final Deserializer<V> valueDeserializer;
 
-    public SlidingWindow(
+    public SlidingWindowDef(
             String name,
             long duration,
             int maxCount,
@@ -68,11 +68,11 @@ public class SlidingWindow<K, V> implements Window<K, V> {
     }
 
     @Override
-    public WindowInstance<K, V> build() {
-        return new SlidingWindowInstance();
+    public Window<K, V> build() {
+        return new SlidingWindow();
     }
 
-    public class SlidingWindowInstance extends WindowSupport implements WindowInstance<K, V> {
+    public class SlidingWindow extends WindowSupport implements Window<K, V> {
         private final Object lock = new Object();
         private ProcessorContext context;
         private int slotNum; // used as a key for Kafka log compaction
