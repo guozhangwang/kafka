@@ -89,18 +89,16 @@ public class ProcessorContextImpl implements ProcessorContext {
         this.initialized = false;
     }
 
+    public ProcessorStateManager stateManager() {
+        return this.stateMgr;
+    }
+
     public RecordCollector recordCollector() {
         return this.collector;
     }
 
     @Override
-    public boolean joinable(ProcessorContext o) {
-
-        ProcessorContextImpl other = (ProcessorContextImpl) o;
-
-        if (this.task != other.task)
-            return false;
-
+    public boolean joinable() {
         Set<TopicPartition> partitions = this.task.partitions();
         Map<Integer, List<String>> partitionsById = new HashMap<>();
         int firstId = -1;
@@ -171,6 +169,10 @@ public class ProcessorContextImpl implements ProcessorContext {
         stateMgr.register(store, restoreFunc);
     }
 
+    public StateStore getStateStore(String name) {
+        return stateMgr.getStore(name);
+    }
+
     @Override
     public String topic() {
         if (task.record() == null)
@@ -206,15 +208,23 @@ public class ProcessorContextImpl implements ProcessorContext {
     @Override
     @SuppressWarnings("unchecked")
     public <K, V> void forward(K key, V value) {
-        for (ProcessorNode childNode : (List<ProcessorNode<K, V, ?, ?>>) task.node().children()) {
+        for (ProcessorNode childNode : (List<ProcessorNode<K, V>>) task.node().children()) {
             task.node(childNode);
             childNode.process(key, value);
         }
     }
 
     @Override
+    @SuppressWarnings("unchecked")
+    public <K, V> void forward(K key, V value, int childIndex) {
+        ProcessorNode childNode = (ProcessorNode<K, V>) task.node().children().get(childIndex);
+        task.node(childNode);
+        childNode.process(key, value);
+    }
+
+    @Override
     public void commit() {
-        task.commitOffset();
+        task.needCommit();
     }
 
     @Override

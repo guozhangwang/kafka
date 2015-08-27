@@ -33,5 +33,4 @@ public interface Window<K, V> extends StateStore {
     Iterator<V> findBefore(K key, long timestamp);
 
     void put(K key, V value, long timestamp);
-
 }

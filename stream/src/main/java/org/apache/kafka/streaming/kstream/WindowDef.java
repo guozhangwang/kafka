@@ -15,30 +15,11 @@
  * limitations under the License.
  */
 
-package org.apache.kafka.streaming.kstream.internals;
+package org.apache.kafka.streaming.kstream;
 
-import org.apache.kafka.streaming.processor.Processor;
-import org.apache.kafka.streaming.processor.ProcessorContext;
+public interface WindowDef<K, V> {
 
-abstract class KStreamProcessor<K, V> implements Processor<K, V> {
+    String name();
 
-    protected ProcessorContext context;
-
-    @Override
-    abstract public void process(K key, V value);
-
-    @Override
-    public void init(ProcessorContext context) {
-        this.context = context;
-    }
-
-    @Override
-    public void punctuate(long streamTime) {
-       // do nothing
-    }
-
-    @Override
-    public void close() {
-        // do nothing
-    }
+    Window<K, V> instance();
 }

@@ -17,82 +17,52 @@
 
 package org.apache.kafka.streaming.kstream.internals;
 
-import org.apache.kafka.streaming.processor.Processor;
-import org.apache.kafka.streaming.processor.TopologyBuilder;
-import org.apache.kafka.streaming.processor.ProcessorContext;
-import org.apache.kafka.streaming.kstream.KStream;
-import org.apache.kafka.streaming.kstream.KStreamWindowed;
-import org.apache.kafka.streaming.kstream.ValueJoiner;
 import org.apache.kafka.streaming.kstream.Window;
+import org.apache.kafka.streaming.processor.Processor;
+import org.apache.kafka.streaming.processor.ProcessorDef;
+import org.apache.kafka.streaming.processor.ProcessorContext;
+import org.apache.kafka.streaming.kstream.WindowDef;
 
-public class KStreamWindow<K, V> extends Processor<K, V, K, V> {
+public class KStreamWindow<K, V> implements ProcessorDef {
 
-    public static final class KStreamWindowedImpl<K, V> extends KStreamImpl<K, V> implements KStreamWindowed<K, V> {
+    private final WindowDef<K, V> windowDef;
 
-        public KStreamWindow<K, V> windowed;
+    KStreamWindow(WindowDef<K, V> windowDef) {
+        this.windowDef = windowDef;
+    }
 
-        public KStreamWindowedImpl(TopologyBuilder topology, KStreamWindow<K, V> windowed) {
-            super(topology, windowed);
-            this.windowed = windowed;
+    public WindowDef<K, V> window() {
+        return windowDef;
+    }
+
+    @Override
+    public Processor instance() {
+        return new KStreamWindowProcessor();
+    }
+
+    private class KStreamWindowProcessor extends KStreamProcessor<K, V> {
+
+        private Window<K, V> window;
+
+        @Override
+        public void init(ProcessorContext context) {
+            super.init(context);
+            this.window = windowDef.instance();
+            this.window.init(context);
+        }
+
+        @SuppressWarnings("unchecked")
+        @Override
+        public void process(K key, V value) {
+            synchronized (this) {
+                window.put(key, value, context.timestamp());
+                context.forward(key, value);
+            }
         }
 
         @Override
-        public <V1, V2> KStream<K, V2> join(KStreamWindowed<K, V1> other, ValueJoiner<V, V1, V2> processor) {
-            return join(other, false, processor);
+        public void close() {
+            window.close();
         }
-
-        @Override
-        public <V1, V2> KStream<K, V2> joinPrior(KStreamWindowed<K, V1> other, ValueJoiner<V, V1, V2> processor) {
-            return join(other, true, processor);
-        }
-
-        private <V1, V2> KStream<K, V2> join(KStreamWindowed<K, V1> other, boolean prior, ValueJoiner<V, V1, V2> processor) {
-            KStreamWindow<K, V> thisWindow = this.windowed;
-            KStreamWindow<K, V1> otherWindow = ((KStreamWindowedImpl<K, V1>) other).windowed;
-
-            KStreamJoin<K, V2, V, V1> join = new KStreamJoin<>(thisWindow, otherWindow, prior, processor);
-
-            topology.addProcessor(join, thisWindow);
-            topology.addProcessor(join.processorForOtherStream, otherWindow);
-
-            return new KStreamImpl<>(topology, join);
-        }
-    }
-
-    private static final String WINDOW_NAME = "KAFKA-WINDOW";
-
-    private final Window<K, V> window;
-    private ProcessorContext context;
-
-    KStreamWindow(Window<K, V> window) {
-        super(WINDOW_NAME);
-        this.window = window;
-    }
-
-    public Window<K, V> window() {
-        return window;
-    }
-
-    public ProcessorContext context() {
-        return context;
-    }
-
-    @Override
-    public void init(ProcessorContext context) {
-        this.context = context;
-    }
-
-    @SuppressWarnings("unchecked")
-    @Override
-    public void process(K key, V value) {
-        synchronized (this) {
-            window.put(key, value, context.timestamp());
-            forward(key, value);
-        }
-    }
-
-    @Override
-    public void close() {
-        window.close();
     }
 }

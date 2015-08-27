@@ -15,7 +15,7 @@
  * limitations under the License.
  */
 
-package org.apache.kafka.streaming.internals;
+package org.apache.kafka.streaming.kstream.internals;
 
 import org.apache.kafka.common.serialization.IntegerDeserializer;
 import org.apache.kafka.common.serialization.StringDeserializer;
@@ -25,66 +25,60 @@ import org.apache.kafka.streaming.kstream.Predicate;
 import org.apache.kafka.streaming.kstream.internals.KStreamSource;
 import org.apache.kafka.test.MockKStreamBuilder;
 import org.apache.kafka.test.MockProcessor;
-import org.junit.Test;
 
-import java.lang.reflect.Array;
+import org.junit.Test;
 
 import static org.junit.Assert.assertEquals;
 
-public class KStreamBranchTest {
+public class KStreamFilterTest {
 
-    private String topic1 = "topic";
+    private String topicName = "topic";
 
     private KStreamBuilder topology = new MockKStreamBuilder();
     private IntegerDeserializer keyDeserializer = new IntegerDeserializer();
     private StringDeserializer valDeserializer = new StringDeserializer();
 
-    @SuppressWarnings("unchecked")
+    private Predicate<Integer, String> isMultipleOfThree = new Predicate<Integer, String>() {
+        @Override
+        public boolean apply(Integer key, String value) {
+            return (key % 3) == 0;
+        }
+    };
+
     @Test
-    public void testKStreamBranch() {
-
-        Predicate<Integer, String> isEven = new Predicate<Integer, String>() {
-            @Override
-            public boolean apply(Integer key, String value) {
-                return (key % 2) == 0;
-            }
-        };
-        Predicate<Integer, String> isMultipleOfThree = new Predicate<Integer, String>() {
-            @Override
-            public boolean apply(Integer key, String value) {
-                return (key % 3) == 0;
-            }
-        };
-        Predicate<Integer, String> isOdd = new Predicate<Integer, String>() {
-            @Override
-            public boolean apply(Integer key, String value) {
-                return (key % 2) != 0;
-            }
-        };
-
+    public void testFilter() {
         final int[] expectedKeys = new int[]{1, 2, 3, 4, 5, 6, 7};
 
         KStream<Integer, String> stream;
-        KStream<Integer, String>[] branches;
-        MockProcessor<Integer, String>[] processors;
+        MockProcessor<Integer, String> processor;
 
-        stream = topology.<Integer, String>from(keyDeserializer, valDeserializer, topic1);
-        branches = stream.branch(isEven, isMultipleOfThree, isOdd);
-
-        assertEquals(3, branches.length);
-
-        processors = (MockProcessor<Integer, String>[]) Array.newInstance(MockProcessor.class, branches.length);
-        for (int i = 0; i < branches.length; i++) {
-            processors[i] = new MockProcessor<>();
-            branches[i].process(processors[i]);
-        }
+        processor = new MockProcessor<>();
+        stream = topology.<Integer, String>from(keyDeserializer, valDeserializer, topicName);
+        stream.filter(isMultipleOfThree).process(processor);
 
         for (int i = 0; i < expectedKeys.length; i++) {
             ((KStreamSource<Integer, String>) stream).source().process(expectedKeys[i], "V" + expectedKeys[i]);
         }
 
-        assertEquals(3, processors[0].processed.size());
-        assertEquals(2, processors[1].processed.size());
-        assertEquals(4, processors[2].processed.size());
+        assertEquals(2, processor.processed.size());
     }
+
+    @Test
+    public void testFilterOut() {
+        final int[] expectedKeys = new int[]{1, 2, 3, 4, 5, 6, 7};
+
+        KStream<Integer, String> stream;
+        MockProcessor<Integer, String> processor;
+
+        processor = new MockProcessor<>();
+        stream = topology.<Integer, String>from(keyDeserializer, valDeserializer, topicName);
+        stream.filterOut(isMultipleOfThree).process(processor);
+
+        for (int i = 0; i < expectedKeys.length; i++) {
+            ((KStreamSource<Integer, String>) stream).source().process(expectedKeys[i], "V" + expectedKeys[i]);
+        }
+
+        assertEquals(5, processor.processed.size());
+    }
+
 }

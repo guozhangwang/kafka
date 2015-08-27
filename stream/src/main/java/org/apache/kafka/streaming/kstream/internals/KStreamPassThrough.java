@@ -15,19 +15,22 @@
  * limitations under the License.
  */
 
-package org.apache.kafka.streaming.processor;
+package org.apache.kafka.streaming.kstream.internals;
 
-public class ProcessorMetadata {
+import org.apache.kafka.streaming.processor.Processor;
+import org.apache.kafka.streaming.processor.ProcessorDef;
 
-    private String name;
-    private Object value;
+class KStreamPassThrough<K, V> implements ProcessorDef {
 
-    public ProcessorMetadata(String name, Object value) {
-        this.name = name;
-        this.value = value;
+    @Override
+    public Processor instance() {
+        return new KStreamPassThroughProcessor();
     }
 
-    public Object value() {
-        return value;
+    public class KStreamPassThroughProcessor<K, V> extends KStreamProcessor<K, V> {
+        @Override
+        public void process(K key, V value) {
+            context.forward(key, value);
+        }
     }
 }
