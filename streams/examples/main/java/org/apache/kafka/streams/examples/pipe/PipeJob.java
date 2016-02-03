@@ -40,7 +40,7 @@ public class PipeJob {
 
         builder.register(String.class, new StringSerializer(), new StringDeserializer());
 
-        builder.stream("streams-file-input").to("streams-pipe-output");
+        builder.stream(String.class, String.class, "streams-file-input").to("streams-pipe-output");
 
         KafkaStreams streams = new KafkaStreams(builder, props);
         streams.start();

@@ -20,10 +20,8 @@ package org.apache.kafka.streams.examples.pageview;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.JsonNodeFactory;
 import com.fasterxml.jackson.databind.node.ObjectNode;
-import org.apache.kafka.common.serialization.Deserializer;
 import org.apache.kafka.common.serialization.LongDeserializer;
 import org.apache.kafka.common.serialization.LongSerializer;
-import org.apache.kafka.common.serialization.Serializer;
 import org.apache.kafka.common.serialization.StringSerializer;
 import org.apache.kafka.common.serialization.StringDeserializer;
 import org.apache.kafka.connect.json.JsonSerializer;
@@ -31,17 +29,15 @@ import org.apache.kafka.connect.json.JsonDeserializer;
 import org.apache.kafka.streams.KafkaStreams;
 import org.apache.kafka.streams.KeyValue;
 import org.apache.kafka.streams.StreamsConfig;
-import org.apache.kafka.streams.kstream.Aggregator;
 import org.apache.kafka.streams.kstream.HoppingWindows;
 import org.apache.kafka.streams.kstream.KStreamBuilder;
 import org.apache.kafka.streams.kstream.KStream;
 import org.apache.kafka.streams.kstream.KTable;
-import org.apache.kafka.streams.kstream.KeyValueMapper;
-import org.apache.kafka.streams.kstream.Windowed;
 
 import java.util.Properties;
 
-public class PageViewUnTypedJob {
+// NOTE: this can only work with Java 8
+public class PageViewUnTypedLambdaJob {
 
     public static void main(String[] args) throws Exception {
         Properties props = new Properties();
@@ -50,11 +46,6 @@ public class PageViewUnTypedJob {
         props.put(StreamsConfig.ZOOKEEPER_CONNECT_CONFIG, "localhost:2181");
 
         KStreamBuilder builder = new KStreamBuilder();
-
-        final Serializer<String> stringSerializer = new StringSerializer();
-        final Deserializer<String> stringDeserializer = new StringDeserializer();
-        final Serializer<Long> longSerializer = new LongSerializer();
-        final Deserializer<Long> longDeserializer = new LongDeserializer();
 
         //
         // register serializers/deserializers
@@ -68,35 +59,38 @@ public class PageViewUnTypedJob {
         //
         KStream<String, JsonNode> views = builder.stream(String.class, JsonNode.class, "streams-pageview-input");
 
-        KStream<String, JsonNode> viewsByUser = views.map((dummy, record) -> new KeyValue<>(record.get("user").textValue(), record));
+        KStream<String, JsonNode> viewsByUser = views.map((dummy, record) -> new KeyValue<>(record.get("user").textValue(), record));//.returns(String.class, JsonNode.class);
 
         KTable<String, JsonNode> users = builder.table(String.class, JsonNode.class, "streams-userprofile-input");
 
         KTable<String, String> userRegions = users.mapValues(record -> record.get("region").textValue());
 
+        /**
+         * Exception in thread "main" org.apache.kafka.streams.kstream.InsufficientTypeInfoException: Invalid topology building: insufficient type information: key type of this stream
+         at org.apache.kafka.streams.kstream.internals.AbstractStream.ensureJoinableWith(AbstractStream.java:65)
+         at org.apache.kafka.streams.kstream.internals.KStreamImpl.leftJoin(KStreamImpl.java:414)
+         at org.apache.kafka.streams.examples.pageview.PageViewUnTypedLambdaJob.main(PageViewUnTypedLambdaJob.java:74)
+         */
         KStream<JsonNode, JsonNode> regionCount = viewsByUser
                 .leftJoin(userRegions, (view, region) -> {
                     ObjectNode jNode = JsonNodeFactory.instance.objectNode();
 
                     return (JsonNode) jNode.put("user", view.get("user").textValue())
-                            .put("page", view.get("page").textValue())
-                            .put("region", region);
+                                           .put("page", view.get("page").textValue())
+                                           .put("region", region);
                 })
                 .map((user, viewRegion) -> new KeyValue<>(viewRegion.get("region").textValue(), viewRegion))
                 .countByKey(HoppingWindows.of("GeoPageViewsWindow").with(7 * 24 * 60 * 60 * 1000))
                 .toStream()
-                .map(new KeyValueMapper<Windowed<String>, Long, KeyValue<JsonNode, JsonNode>>() {
-                    @Override
-                    public KeyValue<JsonNode, JsonNode> apply(Windowed<String> key, Long value) {
-                        ObjectNode keyNode = JsonNodeFactory.instance.objectNode();
-                        keyNode.put("window-start", key.window().start())
-                                .put("region", key.window().start());
+                .map((winView, count) -> {
+                    ObjectNode keyNode = JsonNodeFactory.instance.objectNode();
+                    keyNode.put("window-start", winView.window().start())
+                           .put("region", winView.window().start());
 
-                        ObjectNode valueNode = JsonNodeFactory.instance.objectNode();
-                        keyNode.put("count", value);
+                    ObjectNode valueNode = JsonNodeFactory.instance.objectNode();
+                    keyNode.put("count", count);
 
-                        return new KeyValue<JsonNode, JsonNode>((JsonNode) keyNode, (JsonNode) valueNode);
-                    }
+                    return new KeyValue<>((JsonNode) keyNode, (JsonNode) valueNode);
                 });
 
         // write to the result topic

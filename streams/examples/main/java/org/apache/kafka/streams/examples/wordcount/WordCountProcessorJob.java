@@ -104,14 +104,12 @@ public class WordCountProcessorJob {
 
         TopologyBuilder builder = new TopologyBuilder();
 
-        builder.register(String.class, new StringSerializer()(), new StringDeserializer());
-
-        builder.addSource("Source", "streams-file-input");
+        builder.addSource("Source", new StringDeserializer(), new StringDeserializer(), "streams-file-input");
 
         builder.addProcessor("Process", new MyProcessorSupplier(), "Source");
         builder.addStateStore(Stores.create("Counts").withStringKeys().withIntegerValues().inMemory().build(), "Process");
 
-        builder.addSink("Sink", "streams-wordcount-output", "Process");
+        builder.addSink("Sink", "streams-wordcount-output", new StringSerializer(), new StringSerializer(), "Process");
 
         KafkaStreams streams = new KafkaStreams(builder, props);
         streams.start();

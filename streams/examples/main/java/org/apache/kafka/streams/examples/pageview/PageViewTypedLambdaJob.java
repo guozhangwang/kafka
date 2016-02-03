@@ -29,16 +29,15 @@ import org.apache.kafka.streams.kstream.HoppingWindows;
 import org.apache.kafka.streams.kstream.KStreamBuilder;
 import org.apache.kafka.streams.kstream.KStream;
 import org.apache.kafka.streams.kstream.KTable;
-import org.apache.kafka.streams.kstream.KeyValueMapper;
 import org.apache.kafka.streams.kstream.SerializationFactory;
-import org.apache.kafka.streams.kstream.Windowed;
 import org.apache.kafka.streams.StreamsConfig;
 
 import java.lang.Override;
 import java.lang.reflect.Type;
 import java.util.Properties;
 
-public class PageViewTypedJob {
+// NOTE: this can only work with Java 8
+public class PageViewTypedLambdaJob {
 
     // POJO classes
     static public class PageView {
@@ -141,25 +140,26 @@ public class PageViewTypedJob {
         //
         KStream<String, PageView> views = builder.stream(String.class, PageView.class, "streams-pageview-input");
 
-        KStream<String, PageView> viewsByUser = views.map((dummy, record) -> new KeyValue<>(record.user, record));
+        KStream<String, PageView> viewsByUser = views.map((dummy, record) -> new KeyValue<>(record.user, record));//.returns(String.class, PageView.class);
 
         KTable<String, UserProfile> users = builder.table(String.class, UserProfile.class, "streams-userprofile-input");
 
+        /**
+         * Exception in thread "main" org.apache.kafka.streams.kstream.InsufficientTypeInfoException: Invalid topology building: insufficient type information: key type of this stream
+         at org.apache.kafka.streams.kstream.internals.AbstractStream.ensureJoinableWith(AbstractStream.java:65)
+         at org.apache.kafka.streams.kstream.internals.KStreamImpl.leftJoin(KStreamImpl.java:414)
+         at org.apache.kafka.streams.examples.pageview.PageViewTypedLambdaJob.main(PageViewTypedLambdaJob.java:150)
+         */
         KStream<WindowedPageViewByRegion, RegionCount> regionCount = viewsByUser
-                .leftJoin(users, (view, profile) -> {
-                    return new PageViewByRegion(view.user, view.page, profile.region);
-               })
+                .leftJoin(users, (view, profile) -> new PageViewByRegion(view.user, view.page, profile.region))//.returns(String.class, PageViewByRegion.class)
                 .map((user, viewRegion) -> new KeyValue<>(viewRegion.region, viewRegion))
                 .countByKey(HoppingWindows.of("GeoPageViewsWindow").with(7 * 24 * 60 * 60 * 1000))
                 .toStream()
-                .map(new KeyValueMapper<Windowed<String>, Long, KeyValue<WindowedPageViewByRegion, RegionCount>>() {
-                    @Override
-                    public KeyValue<WindowedPageViewByRegion, RegionCount> apply(Windowed<String> key, Long value) {
-                        WindowedPageViewByRegion wViewByRegion = new WindowedPageViewByRegion(key.window().start(), key.value());
-                        RegionCount rCount = new RegionCount(key.value(), value);
+                .map((winView, count) -> {
+                    WindowedPageViewByRegion wViewByRegion = new WindowedPageViewByRegion(winView.window().start(), winView.value());
+                    RegionCount rCount = new RegionCount(winView.value(), count);
 
-                        return new KeyValue<>(wViewByRegion, rCount);
-                    }
+                    return new KeyValue<>(wViewByRegion, rCount);
                 });
 
         // write to the result topic

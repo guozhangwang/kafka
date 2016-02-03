@@ -21,28 +21,24 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.JsonNodeFactory;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import org.apache.kafka.clients.consumer.ConsumerConfig;
-import org.apache.kafka.common.serialization.Deserializer;
 import org.apache.kafka.common.serialization.LongDeserializer;
 import org.apache.kafka.common.serialization.LongSerializer;
-import org.apache.kafka.common.serialization.Serializer;
 import org.apache.kafka.common.serialization.StringSerializer;
 import org.apache.kafka.common.serialization.StringDeserializer;
+import org.apache.kafka.connect.json.JsonDeserializer;
 import org.apache.kafka.connect.json.JsonSerializer;
 import org.apache.kafka.streams.KafkaStreams;
 import org.apache.kafka.streams.KeyValue;
 import org.apache.kafka.streams.StreamsConfig;
-import org.apache.kafka.streams.kstream.Aggregator;
 import org.apache.kafka.streams.kstream.KStreamBuilder;
 import org.apache.kafka.streams.kstream.KStream;
-import org.apache.kafka.streams.kstream.KeyValueMapper;
 import org.apache.kafka.streams.kstream.UnlimitedWindows;
-import org.apache.kafka.streams.kstream.ValueMapper;
-import org.apache.kafka.streams.kstream.Windowed;
 
 import java.util.Arrays;
 import java.util.Properties;
 
-public class WordCountJob {
+// NOTE: this can only work with Java 8
+public class WordCountLambdaJob {
 
     public static void main(String[] args) throws Exception {
         Properties props = new Properties();
@@ -57,34 +53,30 @@ public class WordCountJob {
 
         builder.register(String.class, new StringSerializer(), new StringDeserializer());
         builder.register(Long.class, new LongSerializer(), new LongDeserializer());
+        builder.register(JsonNode.class, new JsonSerializer(), new JsonDeserializer());
 
         KStream<String, String> source = builder.stream(String.class, String.class, "streams-file-input");
 
+        /**
+         * Exception in thread "main" org.apache.kafka.streams.kstream.InsufficientTypeInfoException: Invalid topology building: insufficient type information: key type
+         at org.apache.kafka.streams.kstream.internals.AbstractStream.getWindowedKeyType(AbstractStream.java:130)
+         at org.apache.kafka.streams.kstream.internals.KStreamImpl.aggregateByKey(KStreamImpl.java:475)
+         at org.apache.kafka.streams.kstream.internals.KStreamImpl.countByKey(KStreamImpl.java:521)
+         at org.apache.kafka.streams.examples.wordcount.WordCountLambdaJob.main(WordCountLambdaJob.java:67)
+         */
         KStream<String, JsonNode> counts = source
-                .flatMapValues(new ValueMapper<String, Iterable<String>>() {
-                    @Override
-                    public Iterable<String> apply(String value) {
-                        return Arrays.asList(value.toLowerCase().split(" "));
-                    }
-                }).map(new KeyValueMapper<String, String, KeyValue<String, String>>() {
-                    @Override
-                    public KeyValue<String, String> apply(String key, String value) {
-                        return new KeyValue<String, String>(value, value);
-                    }
-                })
+                .flatMapValues(value -> Arrays.asList(value.toLowerCase().split(" ")))
+                .map((key, value) -> new KeyValue<>(value, value))//.returns(String.class, String.class)
                 .countByKey(UnlimitedWindows.of("Counts").startOn(0L))
                 .toStream()
-                .map(new KeyValueMapper<Windowed<String>, Long, KeyValue<String, JsonNode>>() {
-                    @Override
-                    public KeyValue<String, JsonNode> apply(Windowed<String> key, Long value) {
-                        ObjectNode jNode = JsonNodeFactory.instance.objectNode();
+                .map((winKey, value) -> {
+                    ObjectNode jNode = JsonNodeFactory.instance.objectNode();
 
-                        jNode.put("word", key.value())
-                             .put("count", value);
+                    jNode.put("word", winKey.value())
+                         .put("count", value);
 
-                        return new KeyValue<String, JsonNode>(null, jNode);
-                    }
-                });
+                    return new KeyValue<>((String) null, (JsonNode) jNode);
+                });//.returns(String.class, JsonNode.class);
 
         counts.to("streams-wordcount-output");
 
