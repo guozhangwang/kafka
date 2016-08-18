@@ -43,6 +43,6 @@ public final class LogEntry {
     }
     
     public int size() {
-        return record.size() + Records.LOG_OVERHEAD;
+        return record.size() + Records.RECORD_SET_OVERHEAD;
     }
 }

@@ -177,7 +177,7 @@ public class TestUtils {
     public static ByteBuffer partitionRecordsBuffer(long offset, CompressionType compressionType, Record... records) {
         int bufferSize = 0;
         for (Record record : records)
-            bufferSize += Records.LOG_OVERHEAD + record.size();
+            bufferSize += Records.RECORD_SET_OVERHEAD + record.size();
         ByteBuffer buffer = ByteBuffer.allocate(bufferSize);
         MemoryRecords memoryRecords = MemoryRecords.emptyRecords(buffer, compressionType);
         for (Record record : records)

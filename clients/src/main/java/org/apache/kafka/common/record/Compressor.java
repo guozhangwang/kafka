@@ -103,7 +103,7 @@ public class Compressor {
         if (type != CompressionType.NONE) {
             // for compressed records, leave space for the header and the shallow message metadata
             // and move the starting position to the value payload offset
-            buffer.position(initPos + Records.LOG_OVERHEAD + Record.RECORD_OVERHEAD);
+            buffer.position(initPos + Records.RECORD_SET_OVERHEAD + Record.RECORD_OVERHEAD);
         }
 
         // create the stream
@@ -132,17 +132,17 @@ public class Compressor {
             // write the header, for the end offset write as number of records - 1
             buffer.position(initPos);
             buffer.putLong(numRecords - 1);
-            buffer.putInt(pos - initPos - Records.LOG_OVERHEAD);
+            buffer.putInt(pos - initPos - Records.RECORD_SET_OVERHEAD);
             // write the shallow message (the crc and value size are not correct yet)
             Record.write(buffer, maxTimestamp, null, null, type, 0, -1);
             // compute the fill the value size
-            int valueSize = pos - initPos - Records.LOG_OVERHEAD - Record.RECORD_OVERHEAD;
-            buffer.putInt(initPos + Records.LOG_OVERHEAD + Record.KEY_OFFSET_V1, valueSize);
+            int valueSize = pos - initPos - Records.RECORD_SET_OVERHEAD - Record.RECORD_OVERHEAD;
+            buffer.putInt(initPos + Records.RECORD_SET_OVERHEAD + Record.KEY_OFFSET_V1, valueSize);
             // compute and fill the crc at the beginning of the message
             long crc = Record.computeChecksum(buffer,
-                initPos + Records.LOG_OVERHEAD + Record.MAGIC_OFFSET,
-                pos - initPos - Records.LOG_OVERHEAD - Record.MAGIC_OFFSET);
-            Utils.writeUnsignedInt(buffer, initPos + Records.LOG_OVERHEAD + Record.CRC_OFFSET, crc);
+                initPos + Records.RECORD_SET_OVERHEAD + Record.MAGIC_OFFSET,
+                pos - initPos - Records.RECORD_SET_OVERHEAD - Record.MAGIC_OFFSET);
+            Utils.writeUnsignedInt(buffer, initPos + Records.RECORD_SET_OVERHEAD + Record.CRC_OFFSET, crc);
             // reset the position
             buffer.position(pos);
 
