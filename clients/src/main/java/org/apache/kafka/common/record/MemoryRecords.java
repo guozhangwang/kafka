@@ -31,12 +31,6 @@ public class MemoryRecords implements Records {
 
     private final static int WRITE_LIMIT_FOR_READABLE_ONLY = -1;
 
-    // starting offset of the record set
-    private final long startOffset;
-
-    // producer context of the record set
-    private final ProducerContext context;
-
     // the compressor used for appends-only
     private final Compressor compressor;
 
@@ -52,10 +46,14 @@ public class MemoryRecords implements Records {
     // indicate if the memory records is writable or not (i.e. used for appends or read-only)
     private boolean writable;
 
+    // starting offset of the record set
+    private long startOffset;
+
+    // producer context of the record set
+    private ProducerContext context;
+
     // Construct a writable memory records
-    private MemoryRecords(ByteBuffer buffer, long startOffset, CompressionType type, boolean writable, int writeLimit) {
-        this.startOffset = startOffset;
-        this.context = context;
+    private MemoryRecords(ByteBuffer buffer, CompressionType type, boolean writable, int writeLimit) {
         this.writable = writable;
         this.writeLimit = writeLimit;
         this.initialCapacity = buffer.capacity();
@@ -66,6 +64,9 @@ public class MemoryRecords implements Records {
             this.buffer = buffer;
             this.compressor = null;
         }
+
+        this.startOffset = -1L;
+        this.context = null;
     }
 
     public static MemoryRecords emptyRecords(ByteBuffer buffer, CompressionType type, int writeLimit) {
@@ -84,9 +85,12 @@ public class MemoryRecords implements Records {
     /**
      * Append the given record and offset to the buffer
      */
-    public void append(Record record) {
+    public void append(long offset, Record record) {
         if (!writable)
             throw new IllegalStateException("Memory records is not writable");
+
+        if (startOffset == -1)
+            startOffset = offset;
 
         int size = Record.RECORD_OVERHEAD + record.keySize() + record.valueSize();
         compressor.put(record.buffer());
@@ -98,15 +102,20 @@ public class MemoryRecords implements Records {
      * Append a new record and offset to the buffer
      * @return crc of the record
      */
-    public long append(long timestamp, byte[] key, byte[] value) {
+    public long append(long offset, long timestamp, byte[] key, byte[] value) {
         if (!writable)
             throw new IllegalStateException("Memory records is not writable");
+
+        if (startOffset == -1)
+            startOffset = offset;
 
         int size = Record.recordSize(key, value);
         long crc = compressor.putRecord(timestamp, key, value);
         compressor.recordWritten(size);
         return crc;
     }
+
+    private void writeStartOffset
 
     public static byte computeAttributes(CompressionType type) {
         byte attributes = 0;
