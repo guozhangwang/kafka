@@ -40,6 +40,9 @@ public class MemoryRecords implements Records {
     // the capacity of the initial buffer, which is only used for de-allocation of writable records
     private final int initialCapacity;
 
+    // the initial position of the buffer
+    private final int initialPosition;
+
     // the underlying buffer used for read; while the records are still writable it is null
     private ByteBuffer buffer;
 
@@ -56,12 +59,12 @@ public class MemoryRecords implements Records {
     private MemoryRecords(ByteBuffer buffer, CompressionType type, boolean writable, int writeLimit) {
         this.writable = writable;
         this.writeLimit = writeLimit;
+        this.buffer = buffer;
         this.initialCapacity = buffer.capacity();
+        this.initialPosition = buffer.position();
         if (this.writable) {
-            this.buffer = null;
             this.compressor = new Compressor(buffer, type);
         } else {
-            this.buffer = buffer;
             this.compressor = null;
         }
 
@@ -80,6 +83,13 @@ public class MemoryRecords implements Records {
 
     public static MemoryRecords readableRecords(ByteBuffer buffer) {
         return new MemoryRecords(buffer, CompressionType.NONE, false, WRITE_LIMIT_FOR_READABLE_ONLY);
+    }
+
+    /**
+     * Set the producer context for this record set
+     */
+    public void setContext(ProducerContext context) {
+        this.context = context;
     }
 
     /**
@@ -115,8 +125,6 @@ public class MemoryRecords implements Records {
         return crc;
     }
 
-    private void writeStartOffset
-
     public static byte computeAttributes(CompressionType type) {
         byte attributes = 0;
         if (type.id > 0)
@@ -125,7 +133,14 @@ public class MemoryRecords implements Records {
     }
 
     /**
-     * Compute the checksum of the record from the record contents
+     * Compute the checksum of the record set from the record contents
+     */
+    public long computeChecksum() {
+        return computeChecksum(buffer, MAGIC_OFFSET, buffer.limit() - MAGIC_OFFSET);
+    }
+
+    /**
+     * Compute the checksum of the record set from the record contents
      */
     public static long computeChecksum(ByteBuffer buffer, int position, int size) {
         Crc32 crc = new Crc32();
@@ -134,7 +149,7 @@ public class MemoryRecords implements Records {
     }
 
     /**
-     * Compute the checksum of the record from the attributes, key and value payloads
+     * Compute the checksum of the record set from the attributes, key and value payloads
      */
     public static long computeChecksum(byte[] records, CompressionType type, long pid, int epoch, long sequence) {
         Crc32 crc = new Crc32();
@@ -159,14 +174,6 @@ public class MemoryRecords implements Records {
         }
 
         return crc.getValue();
-    }
-
-
-    /**
-     * Compute the checksum of the record from the record contents
-     */
-    public long computeChecksum() {
-        return computeChecksum(buffer, MAGIC_OFFSET, buffer.limit() - MAGIC_OFFSET);
     }
 
     /**
@@ -241,7 +248,7 @@ public class MemoryRecords implements Records {
         if (!this.writable)
             return false;
 
-        return this.compressor.numRecordsWritten() == 0 ?
+        return this.compressor.numRecords() == 0 ?
             this.initialCapacity >= Record.recordSize(key, value) :
             this.writeLimit >= this.compressor.estimatedBytesWritten() + Record.recordSize(key, value);
     }
@@ -255,8 +262,35 @@ public class MemoryRecords implements Records {
      */
     public void close() {
         if (writable) {
-            // close the compressor to fill-in wrapper message metadata if necessary
+            // close the compressor
             compressor.close();
+
+            // start filling in the header of the message set by setting the starting position
+            // to the initialized position first
+            int pos = buffer.position();
+            buffer.position(initialPosition);
+            // first set the base offset as number of records, it will be overwritten on the server side.
+            buffer.putLong(compressor.numRecords());
+            // set the record set size
+            buffer.putInt(pos - initialPosition - Records.RECORDS_OVERHEAD);
+            // compute and fill the crc
+            long crc = computeChecksum(buffer, initialPosition + Records.MAGIC_OFFSET, pos - initialPosition - Records.MAGIC_OFFSET);
+            Utils.writeUnsignedInt(buffer, initialPosition + Records.CRC_OFFSET, crc);
+            buffer.position(initialPosition + Records.MAGIC_OFFSET);
+            // fill the magic byte
+            buffer.put(CURRENT_MAGIC_VALUE);
+            // compute and fill the attributes
+            byte attributes = computeAttributes(compressor.type());
+            buffer.put(attributes);
+            // write the producer context
+            if (context == null)
+                throw new IllegalStateException("The producer context should not be null");
+            buffer.putLong(context.id());
+            buffer.putInt(context.epoch());
+            buffer.putLong(context.sequence());
+
+            // reset the position
+            buffer.position(pos);
 
             // flip the underlying buffer to be ready for reads
             buffer = compressor.buffer();

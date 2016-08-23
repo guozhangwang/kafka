@@ -61,13 +61,15 @@ public interface Records extends Iterable<LogEntry> {
     /**
      * The size for the record set header
      */
-    int HEADER_SIZE_V0 = OFFSET_LENGTH + SIZE_LENGTH;
+    int RECORDS_HEADER_SIZE_V0 = OFFSET_LENGTH + SIZE_LENGTH;
 
-    int HEADER_SIZE_V1 = OFFSET_LENGTH + SIZE_LENGTH;
+    int RECORDS_HEADER_SIZE_V1 = OFFSET_LENGTH + SIZE_LENGTH;
 
-    int HEADER_SIZE_V2 = OFFSET_LENGTH + SIZE_LENGTH +
+    int RECORDS_HEADER_SIZE_V2 = OFFSET_LENGTH + SIZE_LENGTH +
             CRC_LENGTH + MAGIC_LENGTH + ATTRIBUTE_LENGTH +
             PID_LENGTH + EPOCH_LENGTH + SEQUENCE_NUMBER_LENGTH;
+
+    int RECORDS_OVERHEAD = OFFSET_LENGTH + SIZE_LENGTH;
 
     /**
      * The "magic" values, note that for magic value 0 and 1 this class should be used for wrapping a single record

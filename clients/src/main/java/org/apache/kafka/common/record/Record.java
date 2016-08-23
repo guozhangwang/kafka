@@ -16,6 +16,8 @@
  */
 package org.apache.kafka.common.record;
 
+import org.apache.kafka.common.utils.Crc32;
+
 import java.nio.ByteBuffer;
 
 
@@ -70,48 +72,36 @@ public final class Record {
     }
 
     /**
-     * A constructor to create a record. If the record's compression type is not none, then
-     * its value payload should be already compressed with the specified type; the constructor
-     * would always write the value payload as is and will not do the compression itself.
+     * A constructor to create a record by always writting the value payload as is and will not do the compression.
      *
      * @param timestamp The timestamp of the record
      * @param key The key of the record (null, if none)
      * @param value The record value
-     * @param type The compression type used on the contents of the record (if any)
      * @param valueOffset The offset into the payload array used to extract payload
      * @param valueSize The size of the payload to use
      */
-    public Record(long timestamp, byte[] key, byte[] value, CompressionType type, int valueOffset, int valueSize) {
+    public Record(long timestamp, byte[] key, byte[] value, int valueOffset, int valueSize) {
         this(ByteBuffer.allocate(recordSize(key == null ? 0 : key.length,
             value == null ? 0 : valueSize >= 0 ? valueSize : value.length - valueOffset)));
-        write(this.buffer, timestamp, key, value, type, valueOffset, valueSize);
+        write(this.buffer, timestamp, key, value, valueOffset, valueSize);
         this.buffer.rewind();
     }
 
-    public Record(long timestamp, byte[] key, byte[] value, CompressionType type) {
-        this(timestamp, key, value, type, 0, -1);
-    }
-
-    public Record(long timestamp, byte[] value, CompressionType type) {
-        this(timestamp, null, value, type);
-    }
-
     public Record(long timestamp, byte[] key, byte[] value) {
-        this(timestamp, key, value, CompressionType.NONE);
+        this(timestamp, key, value, 0, -1);
     }
 
     public Record(long timestamp, byte[] value) {
-        this(timestamp, null, value, CompressionType.NONE);
+        this(timestamp, null, value);
     }
 
-    // Write a record to the buffer, if the record's compression type is none, then
-    // its value payload should be already compressed with the specified type
-    public static void write(ByteBuffer buffer, long timestamp, byte[] key, byte[] value, CompressionType type, int valueOffset, int valueSize) {
+    // Write a record to the buffer
+    public static void write(ByteBuffer buffer, long timestamp, byte[] key, byte[] value, int valueOffset, int valueSize) {
         // construct the compressor with compression type none since this function will not do any
-        //compression according to the input type, it will just write the record's payload as is
+        // compression but just write the record's payload as is
         Compressor compressor = new Compressor(buffer, CompressionType.NONE);
         try {
-            compressor.putRecord(timestamp, key, value, type, valueOffset, valueSize);
+            compressor.putRecord(timestamp, key, value, valueOffset, valueSize);
         } finally {
             compressor.close();
         }
@@ -135,6 +125,35 @@ public final class Record {
             compressor.putInt(size);
             compressor.put(value, valueOffset, size);
         }
+    }
+
+    /**
+     * Compute the checksum of the record from the attributes, key and value payloads
+     */
+    public static long computeChecksum(long timestamp, byte[] key, byte[] value, int valueOffset, int valueSize) {
+        Crc32 crc = new Crc32();
+
+        // update for the timestamp
+        crc.updateLong(timestamp);
+
+        // update for the key
+        if (key == null) {
+            crc.updateInt(-1);
+        } else {
+            crc.updateInt(key.length);
+            crc.update(key, 0, key.length);
+        }
+
+        // update for the value
+        if (value == null) {
+            crc.updateInt(-1);
+        } else {
+            int size = valueSize >= 0 ? valueSize : (value.length - valueOffset);
+            crc.updateInt(size);
+            crc.update(value, valueOffset, size);
+        }
+
+        return crc.getValue();
     }
 
     public static int recordSize(byte[] key, byte[] value) {

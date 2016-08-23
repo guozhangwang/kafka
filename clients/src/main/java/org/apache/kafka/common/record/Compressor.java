@@ -18,7 +18,6 @@ package org.apache.kafka.common.record;
 
 import java.lang.reflect.Constructor;
 import org.apache.kafka.common.KafkaException;
-import org.apache.kafka.common.utils.Utils;
 
 import java.io.InputStream;
 import java.io.OutputStream;
@@ -86,10 +85,10 @@ public class Compressor {
     private final ByteBufferOutputStream bufferStream;
     private final int initPos;
 
-    public long writtenUncompressed;
-    public long numRecords;
-    public float compressionRate;
-    public long maxTimestamp;
+    private long numRecords;
+    private long maxTimestamp;
+    private long writtenUncompressed;
+    private float compressionRate;
 
     public Compressor(ByteBuffer buffer, CompressionType type) {
         this.type = type;
@@ -100,11 +99,9 @@ public class Compressor {
         this.compressionRate = 1;
         this.maxTimestamp = Record.NO_TIMESTAMP;
 
-        if (type != CompressionType.NONE) {
-            // for compressed records, leave space for the header and the shallow message metadata
-            // and move the starting position to the value payload offset
-            buffer.position(initPos + Records.RECORD_SET_OVERHEAD + Record.RECORD_OVERHEAD);
-        }
+        // leave space for the message set header and move the starting position
+        // to the offset of the messages
+        buffer.position(initPos + Records.RECORDS_HEADER_SIZE_V2);
 
         // create the stream
         bufferStream = new ByteBufferOutputStream(buffer);
@@ -115,42 +112,26 @@ public class Compressor {
         return bufferStream.buffer();
     }
 
+    public CompressionType type() {
+        return type;
+    }
+
     public double compressionRate() {
         return compressionRate;
     }
 
     public void close() {
+        // close the append stream
         try {
             appendStream.close();
         } catch (IOException e) {
             throw new KafkaException(e);
         }
 
-        if (type != CompressionType.NONE) {
-            ByteBuffer buffer = bufferStream.buffer();
-            int pos = buffer.position();
-            // write the header, for the end offset write as number of records - 1
-            buffer.position(initPos);
-            buffer.putLong(numRecords - 1);
-            buffer.putInt(pos - initPos - Records.RECORD_SET_OVERHEAD);
-            // write the shallow message (the crc and value size are not correct yet)
-            Record.write(buffer, maxTimestamp, null, null, type, 0, -1);
-            // compute the fill the value size
-            int valueSize = pos - initPos - Records.RECORD_SET_OVERHEAD - Record.RECORD_OVERHEAD;
-            buffer.putInt(initPos + Records.RECORD_SET_OVERHEAD + Record.KEY_OFFSET_V1, valueSize);
-            // compute and fill the crc at the beginning of the message
-            long crc = Record.computeChecksum(buffer,
-                initPos + Records.RECORD_SET_OVERHEAD + Record.MAGIC_OFFSET,
-                pos - initPos - Records.RECORD_SET_OVERHEAD - Record.MAGIC_OFFSET);
-            Utils.writeUnsignedInt(buffer, initPos + Records.RECORD_SET_OVERHEAD + Record.CRC_OFFSET, crc);
-            // reset the position
-            buffer.position(pos);
-
-            // update the compression ratio
-            this.compressionRate = (float) buffer.position() / this.writtenUncompressed;
-            TYPE_TO_RATE[type.id] = TYPE_TO_RATE[type.id] * COMPRESSION_RATE_DAMPING_FACTOR +
+        // update the compression ratio
+        this.compressionRate = (float) (bufferStream.buffer().position() - initPos) / this.writtenUncompressed;
+        TYPE_TO_RATE[type.id] = TYPE_TO_RATE[type.id] * COMPRESSION_RATE_DAMPING_FACTOR +
                 compressionRate * (1 - COMPRESSION_RATE_DAMPING_FACTOR);
-        }
     }
 
     // Note that for all the write operations below, IO exceptions should
@@ -198,28 +179,26 @@ public class Compressor {
     }
 
     /**
+     * Put a record into the underlying stream
+     *
      * @return CRC of the record
      */
-    public long putRecord(long timestamp, byte[] key, byte[] value, CompressionType type,
-                          int valueOffset, int valueSize) {
-        // put a record as un-compressed into the underlying stream
-        long crc = Record.computeChecksum(timestamp, key, value, type, valueOffset, valueSize);
-        byte attributes = Record.computeAttributes(type);
-        putRecord(crc, attributes, timestamp, key, value, valueOffset, valueSize);
-        return crc;
+    public long putRecord(long timestamp, byte[] key, byte[] value, int valueOffset, int valueSize) {
+        // write the record into the underlying stream with this compressor
+        maxTimestamp = Math.max(maxTimestamp, timestamp);
+        Record.write(this, timestamp, key, value, valueOffset, valueSize);
+
+        // compute the crc as uncompressed bytes
+        return Record.computeChecksum(timestamp, key, value, valueOffset, valueSize);
     }
 
     /**
-     * Put a record as uncompressed into the underlying stream
+     * Put a record into the underlying stream
+     *
      * @return CRC of the record
      */
     public long putRecord(long timestamp, byte[] key, byte[] value) {
-        return putRecord(timestamp, key, value, CompressionType.NONE, 0, -1);
-    }
-
-    private void putRecord(final long crc, final byte attributes, final long timestamp, final byte[] key, final byte[] value, final int valueOffset, final int valueSize) {
-        maxTimestamp = Math.max(maxTimestamp, timestamp);
-        Record.write(this, crc, attributes, timestamp, key, value, valueOffset, valueSize);
+        return putRecord(timestamp, key, value, 0, -1);
     }
 
     public void recordWritten(int size) {
@@ -227,7 +206,7 @@ public class Compressor {
         writtenUncompressed += size;
     }
 
-    public long numRecordsWritten() {
+    public long numRecords() {
         return numRecords;
     }
 
@@ -288,7 +267,7 @@ public class Compressor {
                 case LZ4:
                     try {
                         InputStream stream = (InputStream) lz4InputStreamSupplier.get().newInstance(buffer,
-                                messageVersion == Record.MAGIC_VALUE_V0);
+                                messageVersion == Records.MAGIC_VALUE_V0);
                         return new DataInputStream(stream);
                     } catch (Exception e) {
                         throw new KafkaException(e);
