@@ -50,8 +50,8 @@ public class MemoryRecordsTest {
                                           new Record(0L, "c".getBytes(), "3".getBytes()));
         for (int i = 0; i < list.size(); i++) {
             Record r = list.get(i);
-            recs1.append(i, r);
-            recs2.append(i, 0L, toArray(r.key()), toArray(r.value()));
+            recs1.append(r);
+            recs2.append(0L, toArray(r.key()), toArray(r.value()));
         }
         recs1.close();
         recs2.close();
@@ -74,7 +74,7 @@ public class MemoryRecordsTest {
     @Test
     public void testHasRoomForMethod() {
         MemoryRecords recs1 = MemoryRecords.emptyRecords(ByteBuffer.allocate(1024), compression);
-        recs1.append(0, new Record(0L, "a".getBytes(), "1".getBytes()));
+        recs1.append(new Record(0L, "a".getBytes(), "1".getBytes()));
 
         assertTrue(recs1.hasRoomFor("b".getBytes(), "2".getBytes()));
         recs1.close();

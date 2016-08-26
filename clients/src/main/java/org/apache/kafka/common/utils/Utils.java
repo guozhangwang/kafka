@@ -119,6 +119,29 @@ public class Utils {
     }
 
     /**
+     * Read an unsigned integer stored in variable-length format.
+     * Also update the index to indicate how many bytes were used to encode this integer.
+     *
+     * @param buffer the buffer to read from
+     * @param index the index from which to read the integer.
+     * @return The integer read, as a long to avoid signedness
+     */
+    public static int readUnsignedVarInt(ByteBuffer buffer, int index) throws IOException {
+        int value = 0;
+        int i = 0;
+        int b;
+        while (((b = buffer.get(index++)) & 0x80) != 0) {
+            value |= (b & 0x7F) << i;
+            i += 7;
+            if (i > 35) {
+                throw new IllegalArgumentException("Variable length quantity is too long");
+            }
+        }
+
+        return value | (b << i);
+    }
+
+    /**
      * Read an unsigned integer stored in little-endian format from the {@link InputStream}.
      *
      * @param in The stream to read from
@@ -180,6 +203,23 @@ public class Utils {
      */
     public static void writeUnsignedInt(ByteBuffer buffer, int index, long value) {
         buffer.putInt(index, (int) (value & 0xffffffffL));
+    }
+
+    /**
+     * Write the given unsigned integer following the variable-length from
+     * <a href="http://code.google.com/apis/protocolbuffers/docs/encoding.html">
+     * Google Protocol Buffers</a>. Since it the value is not negative Zig-zag is not used.
+     *
+     * @param buffer The buffer to write to
+     * @param index The position in the buffer at which to begin writing
+     * @param value The value to write
+     */
+    public static void writeUnsignedVarInt(ByteBuffer buffer, int index, int value) {
+        while ((value & 0xffffff80) != 0L) {
+            buffer.put((byte) ((value & 0x7f) | 0x80));
+            value >>>= 7;
+        }
+        buffer.put((byte) (value & 0x7f));
     }
 
     /**
@@ -697,6 +737,19 @@ public class Utils {
         }
         if (exception != null)
             throw exception;
+    }
+
+    /**
+     * Closes {@code closeable} and if an exception is thrown, it is logged at the WARN level.
+     */
+    public static void closeQuietly(Closeable closeable, String name) {
+        if (closeable != null) {
+            try {
+                closeable.close();
+            } catch (Throwable t) {
+                log.warn("Failed to close " + name, t);
+            }
+        }
     }
 
     /**

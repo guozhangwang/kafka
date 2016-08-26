@@ -720,7 +720,7 @@ public class KafkaConsumerTest {
     private Struct fetchResponse(TopicPartition tp, long fetchOffset, int count) {
         MemoryRecords records = MemoryRecords.emptyRecords(ByteBuffer.allocate(1024), CompressionType.NONE);
         for (int i = 0; i < count; i++)
-            records.append(fetchOffset + i, 0L, ("key-" + i).getBytes(), ("value-" + i).getBytes());
+            records.append(0L, ("key-" + i).getBytes(), ("value-" + i).getBytes());
         records.close();
         FetchResponse response = new FetchResponse(Collections.singletonMap(
                 tp, new FetchResponse.PartitionData(Errors.NONE.code(), 5, records.buffer())), 0);

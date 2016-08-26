@@ -136,7 +136,8 @@ class Message(val buffer: ByteBuffer,
 
   /**
    * A constructor to create a Message
-   * @param bytes The payload of the message
+    *
+    * @param bytes The payload of the message
    * @param key The key of the message (null, if none)
    * @param timestamp The timestamp of the message.
    * @param timestampType The timestamp type of the message.

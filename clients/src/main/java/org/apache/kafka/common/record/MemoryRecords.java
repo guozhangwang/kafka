@@ -16,7 +16,6 @@ import java.io.DataInputStream;
 import java.io.EOFException;
 import java.io.IOException;
 import java.nio.ByteBuffer;
-import java.util.ArrayDeque;
 import java.util.Iterator;
 
 import org.apache.kafka.common.KafkaException;
@@ -31,7 +30,7 @@ public class MemoryRecords implements Records {
 
     private final static int WRITE_LIMIT_FOR_READABLE_ONLY = -1;
 
-    // the compressor used for appends-only
+    // the compressor used for writable records
     private final Compressor compressor;
 
     // the write limit for writable buffer, which may be smaller than the buffer capacity
@@ -49,31 +48,35 @@ public class MemoryRecords implements Records {
     // indicate if the memory records is writable or not (i.e. used for appends or read-only)
     private boolean writable;
 
-    // starting offset of the record set
-    private long startOffset;
-
     // producer context of the record set
     private ProducerContext context;
 
     // Construct a writable memory records
-    private MemoryRecords(ByteBuffer buffer, CompressionType type, boolean writable, int writeLimit) {
-        this.writable = writable;
-        this.writeLimit = writeLimit;
+    private MemoryRecords(ByteBuffer buffer, CompressionType type, int writeLimit) {
         this.buffer = buffer;
         this.initialCapacity = buffer.capacity();
         this.initialPosition = buffer.position();
-        if (this.writable) {
-            this.compressor = new Compressor(buffer, type);
-        } else {
-            this.compressor = null;
-        }
 
-        this.startOffset = -1L;
+        this.writable = true;
+        this.writeLimit = writeLimit;
+        this.compressor = new Compressor(buffer, type);
         this.context = null;
     }
 
+    // Construct a readable memory records
+    private MemoryRecords(ByteBuffer buffer) {
+        this.buffer = buffer;
+        this.initialCapacity = buffer.capacity();
+        this.initialPosition = buffer.position();
+
+        this.writable = false;
+        this.writeLimit = WRITE_LIMIT_FOR_READABLE_ONLY;
+        this.compressor = null;
+        this.context = context();
+    }
+
     public static MemoryRecords emptyRecords(ByteBuffer buffer, CompressionType type, int writeLimit) {
-        return new MemoryRecords(buffer, type, true, writeLimit);
+        return new MemoryRecords(buffer, type, writeLimit);
     }
 
     public static MemoryRecords emptyRecords(ByteBuffer buffer, CompressionType type) {
@@ -82,7 +85,7 @@ public class MemoryRecords implements Records {
     }
 
     public static MemoryRecords readableRecords(ByteBuffer buffer) {
-        return new MemoryRecords(buffer, CompressionType.NONE, false, WRITE_LIMIT_FOR_READABLE_ONLY);
+        return new MemoryRecords(buffer);
     }
 
     /**
@@ -95,12 +98,9 @@ public class MemoryRecords implements Records {
     /**
      * Append the given record and offset to the buffer
      */
-    public void append(long offset, Record record) {
+    public void append(Record record) {
         if (!writable)
             throw new IllegalStateException("Memory records is not writable");
-
-        if (startOffset == -1)
-            startOffset = offset;
 
         int size = Record.RECORD_OVERHEAD + record.keySize() + record.valueSize();
         compressor.put(record.buffer());
@@ -112,12 +112,9 @@ public class MemoryRecords implements Records {
      * Append a new record and offset to the buffer
      * @return crc of the record
      */
-    public long append(long offset, long timestamp, byte[] key, byte[] value) {
+    public long append(long timestamp, byte[] key, byte[] value) {
         if (!writable)
             throw new IllegalStateException("Memory records is not writable");
-
-        if (startOffset == -1)
-            startOffset = offset;
 
         int size = Record.recordSize(key, value);
         long crc = compressor.putRecord(timestamp, key, value);
@@ -180,7 +177,7 @@ public class MemoryRecords implements Records {
      * Retrieve the previously computed CRC for this record
      */
     public long checksum() {
-        return Utils.readUnsignedInt(buffer, CRC_OFFSET);
+        return Utils.readUnsignedInt(buffer, initialPosition + CRC_OFFSET);
     }
 
     /**
@@ -202,17 +199,42 @@ public class MemoryRecords implements Records {
     }
 
     /**
-     * The magic version of this record
+     * The starting offset of this record set
      */
-    public byte magic() {
-        return buffer.get(MAGIC_OFFSET);
+    public long offset() {
+        return buffer.getLong(initialPosition + OFFSET_OFFSET);
     }
 
     /**
-     * The attributes stored with this record
+     * The size of this record set
+     */
+    public int size() {
+        return buffer.getInt(initialPosition + SIZE_OFFSET);
+    }
+
+    /**
+     * The magic version of this record set
+     */
+    public byte magic() {
+        return buffer.get(initialPosition + MAGIC_OFFSET);
+    }
+
+    /**
+     * The attributes stored with this record set
      */
     public byte attributes() {
-        return buffer.get(ATTRIBUTES_OFFSET);
+        return buffer.get(initialPosition + ATTRIBUTES_OFFSET);
+    }
+
+    /**
+     * The producer context stored with this record set
+     */
+    public ProducerContext context() {
+        return new ProducerContext(
+                buffer.getLong(initialPosition + PID_OFFSET),
+                buffer.getInt(initialPosition + EPOCH_OFFSET),
+                buffer.getLong(initialPosition + SEQUENCE_NUMBER_OFFSET)
+        );
     }
 
     /**
@@ -229,7 +251,7 @@ public class MemoryRecords implements Records {
      * The compression type used with this record
      */
     public CompressionType compressionType() {
-        return CompressionType.forId(buffer.get(ATTRIBUTES_OFFSET) & COMPRESSION_CODEC_MASK);
+        return CompressionType.forId(attributes() & COMPRESSION_CODEC_MASK);
     }
 
     /**
@@ -269,7 +291,8 @@ public class MemoryRecords implements Records {
             // to the initialized position first
             int pos = buffer.position();
             buffer.position(initialPosition);
-            // first set the base offset as number of records, it will be overwritten on the server side.
+            // first set the base offset as number of records, in fact it does not matter what values
+            // are set on the producer end since it is always going to be overridden on the server side.
             buffer.putLong(compressor.numRecords());
             // set the record set size
             buffer.putInt(pos - initialPosition - Records.RECORDS_OVERHEAD);
@@ -346,8 +369,20 @@ public class MemoryRecords implements Records {
             // flip on a duplicate buffer for reading
             return new RecordsIterator((ByteBuffer) this.buffer.duplicate().flip());
         } else {
+            // read the starting offset
+            long offset = offset();
+
+            // read record set size
+            int size = size();
+            if (size < 0)
+                throw new IllegalStateException("Record set has negative size " + size + ", which is not expected.");
+
+            // construct the compressor according to the read type
+            // and set the buffer position to the start of the records.
+            buffer.position(initialPosition + RECORDS_HEADER_SIZE_V2);
+
             // do not need to flip for non-writable buffer
-            return new RecordsIterator(this.buffer.duplicate());
+            return new RecordsIterator(buffer, offset, size, type);
         }
     }
     
@@ -379,61 +414,22 @@ public class MemoryRecords implements Records {
      * Iterator for traversing through the records within this set
      */
     public static class RecordsIterator extends AbstractIterator<LogEntry> {
-        private final ByteBuffer buffer;
         private final DataInputStream stream;
-        private final CompressionType type;
-        private RecordsIterator innerIter;
+        private final ByteBuffer buffer;
+        private final long startOffset;
+        private final int size;
 
-        // The variables for inner iterator
-        private final ArrayDeque<LogEntry> logEntries;
-        private final long absoluteBaseOffset;
-
-        public RecordsIterator(ByteBuffer buffer) {
-            this.type = CompressionType.NONE;
+        public RecordsIterator(ByteBuffer buffer, long startOffset, int size, byte magic, CompressionType type) {
+            this.size = size;
             this.buffer = buffer;
-            this.stream = new DataInputStream(new ByteBufferInputStream(buffer));
-            this.logEntries = null;
-            this.absoluteBaseOffset = -1;
-        }
+            this.startOffset = startOffset;
+            this.stream = Compressor.wrapForInput(new ByteBufferInputStream(this.buffer), type, magic);
 
-        // Private constructor for inner iterator.
-        private RecordsIterator(LogEntry entry) {
-            this.type = entry.record().compressionType();
-            this.buffer = entry.record().value();
-            this.shallow = true;
-            this.stream = Compressor.wrapForInput(new ByteBufferInputStream(this.buffer), type, entry.record().magic());
-            long wrapperRecordOffset = entry.offset();
-            // If relative offset is used, we need to decompress the entire message first to compute
-            // the absolute offset.
-            if (entry.record().magic() > Record.MAGIC_VALUE_V0) {
-                this.logEntries = new ArrayDeque<>();
-                long wrapperRecordTimestamp = entry.record().timestamp();
-                while (true) {
-                    try {
-                        LogEntry logEntry = getNextEntryFromStream();
-                        Record recordWithTimestamp = new Record(logEntry.record().buffer(),
-                                                                wrapperRecordTimestamp,
-                                                                entry.record().timestampType());
-                        logEntries.add(new LogEntry(logEntry.offset(), recordWithTimestamp));
-                    } catch (EOFException e) {
-                        break;
-                    } catch (IOException e) {
-                        throw new KafkaException(e);
-                    }
-                }
-                this.absoluteBaseOffset = wrapperRecordOffset - logEntries.getLast().offset();
-            } else {
-                this.logEntries = null;
-                this.absoluteBaseOffset = -1;
-            }
+            // read the full set
         }
 
         /*
          * Read the next record from the buffer.
-         * 
-         * Note that in the compressed message set, each message value size is set as the size of the un-compressed
-         * version of the message value, so when we do de-compression allocating an array of the specified size for
-         * reading compressed value data is sufficient.
          */
         @Override
         protected LogEntry makeNext() {
@@ -475,20 +471,9 @@ public class MemoryRecords implements Records {
         }
 
         private LogEntry getNextEntry() throws IOException {
-            if (logEntries != null)
-                return getNextEntryFromEntryList();
-            else
-                return getNextEntryFromStream();
-        }
-
-        private LogEntry getNextEntryFromEntryList() {
-            return logEntries.isEmpty() ? null : logEntries.remove();
-        }
-
-        private LogEntry getNextEntryFromStream() throws IOException {
             // read the offset
-            long offset = stream.readLong();
-            // read record size
+            long timestamp = stream.readLong();
+            // read record key size
             int size = stream.readInt();
             if (size < 0)
                 throw new IllegalStateException("Record with size " + size);

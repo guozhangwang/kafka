@@ -181,7 +181,7 @@ public class TestUtils {
         ByteBuffer buffer = ByteBuffer.allocate(bufferSize);
         MemoryRecords memoryRecords = MemoryRecords.emptyRecords(buffer, compressionType);
         for (Record record : records)
-            memoryRecords.append(offset, record);
+            memoryRecords.append(record);
         memoryRecords.close();
         return memoryRecords.buffer();
     }
