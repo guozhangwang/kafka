@@ -176,7 +176,7 @@ public final class RecordAccumulator {
             }
 
             // we don't have an in-progress record batch try to allocate a new batch
-            int size = Math.max(this.batchSize, Records.RECORD_SET_OVERHEAD + Record.recordSize(key, value));
+            int size = Math.max(this.batchSize, Records.RECORDS_HEADER_SIZE_V2 + Record.recordSize(0, key, value));
             log.trace("Allocating a new {} byte message buffer for topic {} partition {}", size, tp.topic(), tp.partition());
             ByteBuffer buffer = free.allocate(size, maxTimeToBlock);
             synchronized (dq) {

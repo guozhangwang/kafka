@@ -194,18 +194,18 @@ public class FetcherTest {
         long offset = 0;
         long timestamp = 500L;
 
-        int size = Record.recordSize(key, value);
-        long crc = Record.computeChecksum(timestamp, key, value, CompressionType.NONE, 0, -1);
+        int size = Record.recordSize(0, key, value);
+        long crc = Record.computeChecksum(timestamp, key, value, 0, -1);
 
         // write one valid record
         compressor.putLong(offset);
         compressor.putInt(size);
-        Record.write(compressor, crc, Record.computeAttributes(CompressionType.NONE), timestamp, key, value, 0, -1);
+        Record.write(compressor, timestamp, 0, key, value);
 
         // and one invalid record (note the crc)
         compressor.putLong(offset);
         compressor.putInt(size);
-        Record.write(compressor, crc + 1, Record.computeAttributes(CompressionType.NONE), timestamp, key, value, 0, -1);
+        Record.write(compressor, timestamp, 1, key, value);
 
         compressor.close();
         buffer.flip();

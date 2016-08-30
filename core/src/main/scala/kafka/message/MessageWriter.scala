@@ -36,12 +36,12 @@ class MessageWriter(segmentSize: Int) extends BufferingOutputStream(segmentSize)
       // write magic value
       write(magicValue)
       // write attributes
-      var attributes: Byte = 0
+      var attributes: Long = 0
       if (codec.codec > 0)
         attributes = (attributes | (CompressionCodeMask & codec.codec)).toByte
       if (magicValue > MagicValue_V0)
         attributes = timestampType.updateAttributes(attributes)
-      write(attributes)
+      write(attributes.toInt)
       // Write timestamp
       if (magicValue > MagicValue_V0)
         writeLong(timestamp)

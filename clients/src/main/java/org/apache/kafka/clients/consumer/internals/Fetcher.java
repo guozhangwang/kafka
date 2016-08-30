@@ -51,7 +51,6 @@ import org.apache.kafka.common.requests.MetadataRequest;
 import org.apache.kafka.common.requests.MetadataResponse;
 import org.apache.kafka.common.serialization.Deserializer;
 import org.apache.kafka.common.utils.Time;
-import org.apache.kafka.common.utils.Utils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -549,6 +548,17 @@ public class Fetcher<K, V> {
 
                 ByteBuffer buffer = partition.recordSet;
                 MemoryRecords records = MemoryRecords.readableRecords(buffer);
+
+                // check crc if necessary
+                if (this.checkCrcs && !records.isValid())
+                    throw new KafkaException("Record set for partition " + partition + " at offset "
+                            + records.offset() + " is corrupt (stored crc = " + records.checksum()
+                            + ", computed crc = "
+                            + records.computeChecksum()
+                            + ")");
+
+
+
                 List<ConsumerRecord<K, V>> parsed = new ArrayList<>();
                 boolean skippedRecords = false;
                 for (LogEntry logEntry : records) {
@@ -617,28 +627,19 @@ public class Fetcher<K, V> {
     private ConsumerRecord<K, V> parseRecord(TopicPartition partition, LogEntry logEntry) {
         Record record = logEntry.record();
 
-        if (this.checkCrcs && !record.isValid())
-            throw new KafkaException("Record for partition " + partition + " at offset "
-                    + logEntry.offset() + " is corrupt (stored crc = " + record.checksum()
-                    + ", computed crc = "
-                    + record.computeChecksum()
-                    + ")");
-
         try {
             long offset = logEntry.offset();
             long timestamp = record.timestamp();
-            TimestampType timestampType = record.timestampType();
-            ByteBuffer keyBytes = record.key();
-            byte[] keyByteArray = keyBytes == null ? null : Utils.toArray(keyBytes);
-            K key = keyBytes == null ? null : this.keyDeserializer.deserialize(partition.topic(), keyByteArray);
-            ByteBuffer valueBytes = record.value();
-            byte[] valueByteArray = valueBytes == null ? null : Utils.toArray(valueBytes);
-            V value = valueBytes == null ? null : this.valueDeserializer.deserialize(partition.topic(), valueByteArray);
+            TimestampType timestampType = logEntry.timestampType();
+            byte[] keyBytes = record.key();
+            K key = keyBytes == null ? null : this.keyDeserializer.deserialize(partition.topic(), keyBytes);
+            byte[] valueBytes = record.value();
+            V value = valueBytes == null ? null : this.valueDeserializer.deserialize(partition.topic(), valueBytes);
 
             return new ConsumerRecord<>(partition.topic(), partition.partition(), offset,
                                         timestamp, timestampType, record.checksum(),
-                                        keyByteArray == null ? ConsumerRecord.NULL_SIZE : keyByteArray.length,
-                                        valueByteArray == null ? ConsumerRecord.NULL_SIZE : valueByteArray.length,
+                                        keyBytes == null ? ConsumerRecord.NULL_SIZE : keyBytes.length,
+                                        valueBytes == null ? ConsumerRecord.NULL_SIZE : valueBytes.length,
                                         key, value);
         } catch (RuntimeException e) {
             throw new SerializationException("Error deserializing key/value for partition " + partition +

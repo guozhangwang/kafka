@@ -500,7 +500,7 @@ class ByteBufferMessageSet(val buffer: ByteBuffer) extends MessageSet with Loggi
         else if (messageTimestampType == TimestampType.LOG_APPEND_TIME) {
           // Set timestamp type and timestamp
           buffer.putLong(timestampOffset, now)
-          buffer.put(attributeOffset, messageTimestampType.updateAttributes(attributes))
+          buffer.putLong(attributeOffset, messageTimestampType.updateAttributes(attributes))
         }
 
         if (crcUpdateNeeded) {
@@ -583,7 +583,7 @@ class ByteBufferMessageSet(val buffer: ByteBuffer) extends MessageSet with Loggi
         validateTimestamp(message, now, timestampType, timestampDiffMaxMs)
         if (timestampType == TimestampType.LOG_APPEND_TIME) {
           message.buffer.putLong(Message.TimestampOffset, now)
-          message.buffer.put(Message.AttributesOffset, timestampType.updateAttributes(message.attributes))
+          message.buffer.putLong(Message.AttributesOffset, timestampType.updateAttributes(message.attributes))
           Utils.writeUnsignedInt(message.buffer, Message.CrcOffset, message.computeChecksum)
         }
         if (message.timestamp > maxTimestamp) {

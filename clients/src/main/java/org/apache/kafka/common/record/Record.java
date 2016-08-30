@@ -139,7 +139,7 @@ public final class Record {
     }
 
     /**
-     * Compute the checksum of the record from the attributes, key and value payloads
+     * Compute the CRC (checksum) of the record from the attributes, key and value payloads
      */
     public static long computeChecksum(long timestamp, byte[] key, byte[] value, int valueOffset, int valueSize) {
         Crc32 crc = new Crc32();
@@ -165,6 +165,13 @@ public final class Record {
         }
 
         return crc.getValue();
+    }
+
+    /**
+     * The checksum of this record based on its fields
+     */
+    public long checksum() {
+        return computeChecksum(timestamp, key, value, 0, -1);
     }
 
     /**

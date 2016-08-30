@@ -33,19 +33,18 @@ public final class RecordBatch {
 
     private static final Logger log = LoggerFactory.getLogger(RecordBatch.class);
 
-    public int recordCount = 0;
-    public int maxRecordSize = 0;
-    public volatile int attempts = 0;
     public final long createdMs;
-    public long drainedMs;
-    public long lastAttemptMs;
     public final MemoryRecords records;
     public final TopicPartition topicPartition;
     public final ProduceRequestResult produceFuture;
+    public final List<Thunk> thunks;
     public long lastAppendTime;
-    private final List<Thunk> thunks;
-    private long offsetCounter = 0L;
+    public long drainedMs;
+    public long lastAttemptMs;
     private boolean retry;
+    public int recordCount = 0;
+    public int maxRecordSize = 0;
+    public volatile int attempts = 0;
 
     public RecordBatch(TopicPartition tp, MemoryRecords records, long now) {
         this.createdMs = now;
@@ -53,7 +52,7 @@ public final class RecordBatch {
         this.records = records;
         this.topicPartition = tp;
         this.produceFuture = new ProduceRequestResult();
-        this.thunks = new ArrayList<Thunk>();
+        this.thunks = new ArrayList<>();
         this.lastAppendTime = createdMs;
         this.retry = false;
     }
@@ -67,11 +66,11 @@ public final class RecordBatch {
         if (!this.records.hasRoomFor(key, value)) {
             return null;
         } else {
-            long checksum = this.records.append(timestamp, key, value);
-            this.maxRecordSize = Math.max(this.maxRecordSize, Record.recordSize(key, value));
+            MemoryRecords.AppendResult result = this.records.append(timestamp, key, value);
+            this.maxRecordSize = Math.max(this.maxRecordSize, result.size);
             this.lastAppendTime = now;
             FutureRecordMetadata future = new FutureRecordMetadata(this.produceFuture, this.recordCount,
-                                                                   timestamp, checksum,
+                                                                   timestamp, result.checksum,
                                                                    key == null ? -1 : key.length,
                                                                    value == null ? -1 : value.length);
             if (callback != null)

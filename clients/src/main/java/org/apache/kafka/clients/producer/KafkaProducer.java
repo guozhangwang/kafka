@@ -458,7 +458,7 @@ public class KafkaProducer<K, V> implements Producer<K, V> {
             }
 
             int partition = partition(record, serializedKey, serializedValue, cluster);
-            int serializedSize = Records.RECORD_SET_OVERHEAD + Record.recordSize(serializedKey, serializedValue);
+            int serializedSize = Records.RECORDS_HEADER_SIZE_V2 + Record.recordSize(0, serializedKey, serializedValue);
             ensureValidRecordSize(serializedSize);
             tp = new TopicPartition(record.topic(), partition);
             long timestamp = record.timestamp() == null ? time.milliseconds() : record.timestamp();

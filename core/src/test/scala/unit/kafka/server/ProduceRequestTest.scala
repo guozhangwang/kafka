@@ -54,11 +54,11 @@ class ProduceRequestTest extends BaseRequestTest {
     }
 
     sendAndCheck(JTestUtils.partitionRecordsBuffer(0, CompressionType.NONE,
-      new Record(System.currentTimeMillis(), "key".getBytes, "value".getBytes)), 0)
+      new Record(System.currentTimeMillis(), 0, "key".getBytes, "value".getBytes)), 0)
 
     sendAndCheck(JTestUtils.partitionRecordsBuffer(0, CompressionType.GZIP,
-      new Record(System.currentTimeMillis(), "key1".getBytes, "value1".getBytes),
-      new Record(System.currentTimeMillis(), "key2".getBytes, "value2".getBytes)), 1)
+      new Record(System.currentTimeMillis(), 0, "key1".getBytes, "value1".getBytes),
+      new Record(System.currentTimeMillis(), 1, "key2".getBytes, "value2".getBytes)), 1)
   }
 
   /* returns a pair of partition id and leader id */

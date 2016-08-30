@@ -21,12 +21,14 @@ package org.apache.kafka.common.record;
  */
 public final class LogEntry {
 
+    private final TimestampType timestampType;
     private final long offset;
     private final Record record;
 
-    public LogEntry(long offset, Record record) {
+    public LogEntry(long offset, TimestampType timestampType, Record record) {
         this.offset = offset;
         this.record = record;
+        this.timestampType = timestampType;
     }
 
     public long offset() {
@@ -35,6 +37,10 @@ public final class LogEntry {
 
     public Record record() {
         return this.record;
+    }
+
+    public TimestampType timestampType() {
+        return timestampType;
     }
 
     @Override

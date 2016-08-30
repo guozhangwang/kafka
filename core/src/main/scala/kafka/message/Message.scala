@@ -169,11 +169,11 @@ class Message(val buffer: ByteBuffer,
     // skip crc, we will fill that in at the end
     buffer.position(MagicOffset)
     buffer.put(magicValue)
-    val attributes: Byte =
+    val attributes: Long =
       if (codec.codec > 0)
-        timestampType.updateAttributes((CompressionCodeMask & codec.codec).toByte)
+        timestampType.updateAttributes((CompressionCodeMask & codec.codec))
       else 0
-    buffer.put(attributes)
+    buffer.putLong(attributes)
     // Only put timestamp when "magic" value is greater than 0
     if (magic > MagicValue_V0)
       buffer.putLong(timestamp)
@@ -353,7 +353,7 @@ class Message(val buffer: ByteBuffer,
       // Up-conversion, reserve CRC and update magic byte
       byteBuffer.position(Message.MagicOffset)
       byteBuffer.put(Message.MagicValue_V1)
-      byteBuffer.put(timestampType.updateAttributes(attributes))
+      byteBuffer.putLong(timestampType.updateAttributes(attributes))
       // Up-conversion, insert the timestamp field
       if (timestampType == TimestampType.LOG_APPEND_TIME)
         byteBuffer.putLong(now)
@@ -364,7 +364,7 @@ class Message(val buffer: ByteBuffer,
       // Down-conversion, reserve CRC and update magic byte
       byteBuffer.position(Message.MagicOffset)
       byteBuffer.put(Message.MagicValue_V0)
-      byteBuffer.put(TimestampType.CREATE_TIME.updateAttributes(attributes))
+      byteBuffer.putLong(TimestampType.CREATE_TIME.updateAttributes(attributes))
       // Down-conversion, skip the timestamp field
       byteBuffer.put(buffer.array(), buffer.arrayOffset() + Message.KeySizeOffset_V1, size - Message.KeySizeOffset_V1)
     }

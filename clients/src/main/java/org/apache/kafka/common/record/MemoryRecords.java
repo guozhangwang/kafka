@@ -30,6 +30,16 @@ public class MemoryRecords implements Records {
 
     private final static int WRITE_LIMIT_FOR_READABLE_ONLY = -1;
 
+    public class AppendResult {
+        public long checksum;
+        public int size;
+
+        public AppendResult(long checksum, int size) {
+            this.checksum = checksum;
+            this.size = size;
+        }
+    }
+
     // the compressor used for writable records
     private final Compressor compressor;
 
@@ -91,28 +101,33 @@ public class MemoryRecords implements Records {
     /**
      * Append the given record and offset to the buffer
      */
-    public long append(Record record) {
+    public AppendResult append(Record record) {
         if (!writable)
             throw new IllegalStateException("Memory records is not writable");
 
         int size = record.size();
         long crc = compressor.putRecord(record.timestamp(), record.key(), record.value());
         compressor.recordWritten(size);
-        return crc;
+
+        return new AppendResult(crc, size);
     }
 
     /**
      * Append a new record and offset to the buffer
-     * @return crc of the record
      */
-    public long append(long timestamp, int deltaOffset, byte[] key, byte[] value) {
+    public AppendResult append(long timestamp, byte[] key, byte[] value) {
         if (!writable)
             throw new IllegalStateException("Memory records is not writable");
+
+        // the delta offset of this record is computed
+        // as the number of currently appended records
+        int deltaOffset = compressor.numRecords();
 
         int size = Record.recordSize(deltaOffset, key, value);
         long crc = compressor.putRecord(timestamp, key, value);
         compressor.recordWritten(size);
-        return crc;
+
+        return new AppendResult(crc, size);
     }
 
     public static long computeAttributes(CompressionType compressionType, TimestampType timestampType) {
@@ -136,34 +151,6 @@ public class MemoryRecords implements Records {
     public static long computeChecksum(ByteBuffer buffer, int position, int size) {
         Crc32 crc = new Crc32();
         crc.update(buffer.array(), buffer.arrayOffset() + position, size);
-        return crc.getValue();
-    }
-
-    /**
-     * Compute the checksum of the record set from the attributes, key and value payloads
-     */
-    public static long computeChecksum(byte[] records, CompressionType compressionType, TimestampType timestampType, long pid, int epoch, long sequence) {
-        Crc32 crc = new Crc32();
-
-        // update for the magic value
-        crc.update(CURRENT_MAGIC_VALUE);
-
-        // update for the attributes
-        crc.updateInt((int) computeAttributes(compressionType, timestampType));
-
-        // update for the pid, epoch and sequence number
-        crc.updateLong(pid);
-        crc.updateInt(epoch);
-        crc.updateLong(sequence);
-
-        // update for the records
-        if (records == null) {
-            crc.updateInt(-1);
-        } else {
-            crc.updateInt(records.length);
-            crc.update(records, 0, records.length);
-        }
-
         return crc.getValue();
     }
 
@@ -397,7 +384,9 @@ public class MemoryRecords implements Records {
             byte magic = magic();
 
             // construct the compressor according to the read type
-            CompressionType type = compressionType();
+            CompressionType compressionType = compressionType();
+
+            TimestampType timestampType = timestampType();
 
             // read the number of records
             int numRecords = numRecords();
@@ -406,7 +395,7 @@ public class MemoryRecords implements Records {
             // initialize for reading them
             buffer.position(initialPosition + RECORDS_HEADER_SIZE_V2);
 
-            return new RecordsIterator(Compressor.wrapForInput(new ByteBufferInputStream(this.buffer), type, magic), offset, numRecords);
+            return new RecordsIterator(Compressor.wrapForInput(new ByteBufferInputStream(this.buffer), compressionType, magic), offset, timestampType, numRecords);
         }
     }
     
@@ -439,15 +428,17 @@ public class MemoryRecords implements Records {
      */
     private static class RecordsIterator extends AbstractIterator<LogEntry> {
         private final DataInputStream stream;
+        private final TimestampType timestampType;
         private final long baseOffset;
         private final int numRecords;
 
         private int recordsRead;
 
-        public RecordsIterator(DataInputStream stream, long baseOffset, int numRecords) {
+        public RecordsIterator(DataInputStream stream, long baseOffset, TimestampType timestampType, int numRecords) {
             this.stream = stream;
             this.numRecords = numRecords;
             this.baseOffset = baseOffset;
+            this.timestampType = timestampType;
 
             this.recordsRead = 0;
         }
@@ -464,7 +455,7 @@ public class MemoryRecords implements Records {
                     return allDone();
 
                 // convert offset to absolute offset if needed.
-                return new LogEntry(baseOffset + record.deltaOffset(), record);
+                return new LogEntry(baseOffset + record.deltaOffset(), timestampType, record);
             } catch (EOFException e) {
                 return allDone();
             } catch (IOException e) {
