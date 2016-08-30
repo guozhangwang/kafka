@@ -51,6 +51,9 @@ public class MemoryRecords implements Records {
     // producer context of the record set
     private ProducerContext context;
 
+    // delta offset of the record set
+    private int deltaOffset;
+
     // Construct a writable memory records
     private MemoryRecords(ByteBuffer buffer, CompressionType type, int writeLimit) {
         this.buffer = buffer;
@@ -61,6 +64,7 @@ public class MemoryRecords implements Records {
         this.writeLimit = writeLimit;
         this.compressor = new Compressor(buffer, type);
         this.context = null;
+        this.deltaOffset = 0;
     }
 
     // Construct a readable memory records
@@ -73,6 +77,7 @@ public class MemoryRecords implements Records {
         this.writeLimit = WRITE_LIMIT_FOR_READABLE_ONLY;
         this.compressor = null;
         this.context = context();
+        this.deltaOffset = -1;
     }
 
     public static MemoryRecords emptyRecords(ByteBuffer buffer, CompressionType type, int writeLimit) {
@@ -102,7 +107,7 @@ public class MemoryRecords implements Records {
         if (!writable)
             throw new IllegalStateException("Memory records is not writable");
 
-        int size = Record.RECORD_OVERHEAD + record.keySize() + record.valueSize();
+        int size = record.size();
         compressor.put(record.buffer());
         compressor.recordWritten(size);
         record.buffer().rewind();
@@ -112,20 +117,21 @@ public class MemoryRecords implements Records {
      * Append a new record and offset to the buffer
      * @return crc of the record
      */
-    public long append(long timestamp, byte[] key, byte[] value) {
+    public long append(long timestamp, int deltaOffset, byte[] key, byte[] value) {
         if (!writable)
             throw new IllegalStateException("Memory records is not writable");
 
-        int size = Record.recordSize(key, value);
+        int size = Record.recordSize(deltaOffset, key, value);
         long crc = compressor.putRecord(timestamp, key, value);
         compressor.recordWritten(size);
         return crc;
     }
 
-    public static byte computeAttributes(CompressionType type) {
-        byte attributes = 0;
-        if (type.id > 0)
-            attributes = (byte) (attributes | (COMPRESSION_CODEC_MASK & type.id));
+    public static long computeAttributes(CompressionType compressionType, TimestampType timestampType) {
+        long attributes = 0x00000000L;
+        attributes = compressionType.updateAttributes(attributes);
+        attributes = timestampType.updateAttributes(attributes)
+
         return attributes;
     }
 
@@ -222,8 +228,8 @@ public class MemoryRecords implements Records {
     /**
      * The attributes stored with this record set
      */
-    public byte attributes() {
-        return buffer.get(initialPosition + ATTRIBUTES_OFFSET);
+    public long attributes() {
+        return Utils.readUnsignedInt(buffer, initialPosition + ATTRIBUTES_OFFSET);
     }
 
     /**
@@ -251,7 +257,7 @@ public class MemoryRecords implements Records {
      * The compression type used with this record
      */
     public CompressionType compressionType() {
-        return CompressionType.forId(attributes() & COMPRESSION_CODEC_MASK);
+        return CompressionType.forAttributes(attributes());
     }
 
     /**
@@ -271,8 +277,8 @@ public class MemoryRecords implements Records {
             return false;
 
         return this.compressor.numRecords() == 0 ?
-            this.initialCapacity >= Record.recordSize(key, value) :
-            this.writeLimit >= this.compressor.estimatedBytesWritten() + Record.recordSize(key, value);
+            this.initialCapacity >= Record.recordSize(this.deltaOffset, key, value) :
+            this.writeLimit >= this.compressor.estimatedBytesWritten() + Record.recordSize(this.deltaOffset, key, value);
     }
 
     public boolean isFull() {
@@ -287,7 +293,7 @@ public class MemoryRecords implements Records {
             // close the compressor
             compressor.close();
 
-            // start filling in the header of the message set by setting the starting position
+            // start filling in the header of the record set by setting the starting position
             // to the initialized position first
             int pos = buffer.position();
             buffer.position(initialPosition);
@@ -367,7 +373,9 @@ public class MemoryRecords implements Records {
     public Iterator<LogEntry> iterator() {
         if (writable) {
             // flip on a duplicate buffer for reading
-            return new RecordsIterator((ByteBuffer) this.buffer.duplicate().flip());
+            ByteBuffer buffer = (ByteBuffer) this.buffer.duplicate().flip();
+
+            return MemoryRecords.readableRecords(buffer).iterator();
         } else {
             // read the starting offset
             long offset = offset();
@@ -377,12 +385,19 @@ public class MemoryRecords implements Records {
             if (size < 0)
                 throw new IllegalStateException("Record set has negative size " + size + ", which is not expected.");
 
+            // read the magic byte
+            byte magic = magic();
+
+            // read the attribute bytes and read the compression type
+
             // construct the compressor according to the read type
             // and set the buffer position to the start of the records.
+            CompressionType type = compressionType();
+
             buffer.position(initialPosition + RECORDS_HEADER_SIZE_V2);
 
             // do not need to flip for non-writable buffer
-            return new RecordsIterator(buffer, offset, size, type);
+            return new RecordsIterator(buffer, offset, size, magic, type);
         }
     }
     
@@ -416,16 +431,16 @@ public class MemoryRecords implements Records {
     public static class RecordsIterator extends AbstractIterator<LogEntry> {
         private final DataInputStream stream;
         private final ByteBuffer buffer;
-        private final long startOffset;
+        private final long baseOffset;
         private final int size;
 
-        public RecordsIterator(ByteBuffer buffer, long startOffset, int size, byte magic, CompressionType type) {
+        public RecordsIterator(ByteBuffer buffer, long baseOffset, int size, byte magic, CompressionType type) {
             this.size = size;
             this.buffer = buffer;
-            this.startOffset = startOffset;
+            this.baseOffset = baseOffset;
             this.stream = Compressor.wrapForInput(new ByteBufferInputStream(this.buffer), type, magic);
 
-            // read the full set
+            // read the record set header first, starting with the  base offset
         }
 
         /*

@@ -44,7 +44,7 @@ public interface Records extends Iterable<LogEntry> {
 
     // attributes of the record set
     int ATTRIBUTES_OFFSET = MAGIC_OFFSET + MAGIC_LENGTH;
-    int ATTRIBUTE_LENGTH = 1;
+    int ATTRIBUTE_LENGTH = 4;
 
     // TODO: may need to rename this producer id of the record set
     int PID_OFFSET = ATTRIBUTES_OFFSET + ATTRIBUTE_LENGTH;
@@ -58,8 +58,12 @@ public interface Records extends Iterable<LogEntry> {
     int SEQUENCE_NUMBER_OFFSET = EPOCH_OFFSET + EPOCH_LENGTH;
     int SEQUENCE_NUMBER_LENGTH = 8;
 
+    // max delta offset of the record set
+    int MAX_DELTA_OFFSET_OFFSET = SEQUENCE_NUMBER_OFFSET + SEQUENCE_NUMBER_LENGTH;
+    int MAX_DELTA_OFFSET_LENGTH = 4;
+
     // number of records in this record set
-    int NUM_RECORDS_OFFSET = SEQUENCE_NUMBER_OFFSET + SEQUENCE_NUMBER_LENGTH;
+    int NUM_RECORDS_OFFSET = MAX_DELTA_OFFSET_OFFSET + MAX_DELTA_OFFSET_LENGTH;
     int NUM_RECORDS_LENGTH = 4;
 
     /**
@@ -71,7 +75,8 @@ public interface Records extends Iterable<LogEntry> {
 
     int RECORDS_HEADER_SIZE_V2 = OFFSET_LENGTH + SIZE_LENGTH +
             CRC_LENGTH + MAGIC_LENGTH + ATTRIBUTE_LENGTH +
-            PID_LENGTH + EPOCH_LENGTH + SEQUENCE_NUMBER_LENGTH;
+            PID_LENGTH + EPOCH_LENGTH + SEQUENCE_NUMBER_LENGTH +
+            MAX_DELTA_OFFSET_LENGTH + NUM_RECORDS_LENGTH;
 
     int RECORDS_OVERHEAD = OFFSET_LENGTH + SIZE_LENGTH;
 
@@ -91,11 +96,22 @@ public interface Records extends Iterable<LogEntry> {
      * Specifies the mask for the compression code. 3 bits to hold the compression codec. 0 is reserved to indicate no
      * compression
      */
-    int COMPRESSION_CODEC_MASK = 0x07;
+    long COMPRESSION_CODEC_MASK = 0x00000007L;
+
+    /**
+     * Compression code for uncompressed records
+     */
+    int NO_COMPRESSION = 0;
+
+    /**
+     * Specify the mask of timestamp type.
+     * 0 for {@link TimestampType.CREATE_TIME}, 1 for {@link TimestampType.LOG_APPEND_TIME}.
+     */
+    long TIMESTAMP_TYPE_MASK = 0x00000008L;
+    int TIMESTAMP_TYPE_ATTRIBUTE_OFFSET = 3;
 
     /**
      * The size of these records in bytes
      */
     int sizeInBytes();
-
 }

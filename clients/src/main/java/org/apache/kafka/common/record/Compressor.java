@@ -178,6 +178,14 @@ public class Compressor {
         }
     }
 
+    public void put(final byte[] bytes) {
+        try {
+            appendStream.write(bytes, 0, bytes.length);
+        } catch (IOException e) {
+            throw new KafkaException("I/O exception when writing to the append stream, closing", e);
+        }
+    }
+
     /**
      * Put a record into the underlying stream
      *

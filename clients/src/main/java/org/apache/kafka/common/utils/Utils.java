@@ -12,6 +12,7 @@
  */
 package org.apache.kafka.common.utils;
 
+import java.io.DataInput;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.Closeable;
@@ -119,29 +120,6 @@ public class Utils {
     }
 
     /**
-     * Read an unsigned integer stored in variable-length format.
-     * Also update the index to indicate how many bytes were used to encode this integer.
-     *
-     * @param buffer the buffer to read from
-     * @param index the index from which to read the integer.
-     * @return The integer read, as a long to avoid signedness
-     */
-    public static int readUnsignedVarInt(ByteBuffer buffer, int index) throws IOException {
-        int value = 0;
-        int i = 0;
-        int b;
-        while (((b = buffer.get(index++)) & 0x80) != 0) {
-            value |= (b & 0x7F) << i;
-            i += 7;
-            if (i > 35) {
-                throw new IllegalArgumentException("Variable length quantity is too long");
-            }
-        }
-
-        return value | (b << i);
-    }
-
-    /**
      * Read an unsigned integer stored in little-endian format from the {@link InputStream}.
      *
      * @param in The stream to read from
@@ -155,21 +133,6 @@ public class Utils {
     }
 
     /**
-     * Get the little-endian value of an integer as a byte array.
-     * @param val The value to convert to a little-endian array
-     * @return The little-endian encoded array of bytes for the value
-     */
-    public static byte[] toArrayLE(int val) {
-        return new byte[] {
-            (byte) (val >> 8 * 0),
-            (byte) (val >> 8 * 1),
-            (byte) (val >> 8 * 2),
-            (byte) (val >> 8 * 3)
-        };
-    }
-
-
-    /**
      * Read an unsigned integer stored in little-endian format from a byte array
      * at a given offset.
      *
@@ -179,9 +142,56 @@ public class Utils {
      */
     public static int readUnsignedIntLE(byte[] buffer, int offset) {
         return (buffer[offset++] << 8 * 0)
-             | (buffer[offset++] << 8 * 1)
-             | (buffer[offset++] << 8 * 2)
-             | (buffer[offset]   << 8 * 3);
+                | (buffer[offset++] << 8 * 1)
+                | (buffer[offset++] << 8 * 2)
+                | (buffer[offset]   << 8 * 3);
+    }
+
+    /**
+     * Read an unsigned integer stored in variable-length format.
+     * Also update the index to indicate how many bytes were used to encode this integer.
+     *
+     * @param in to read from
+     * @return The integer read, as a long to avoid signedness
+     *
+     * @throws IllegalArgumentException if variable-length value does not terminate
+     *                                  after 5 bytes have been read
+     * @throws IOException              if {@link DataInput} throws {@link IOException}
+     */
+    public static int readUnsignedVarInt(DataInput in) throws IOException {
+        int value = 0;
+        int i = 0;
+        int b;
+        while (((b = in.readByte()) & 0x80) != 0) {
+            value |= (b & 0x7f) << i;
+            i += 7;
+            if (i > 35) {
+                throw new IllegalArgumentException("Variable length quantity is too long");
+            }
+        }
+
+        return value | (b << i);
+    }
+
+    /**
+     * Read an integer stored in variable-length format using Zig-zag decoding.
+     * Also update the index to indicate how many bytes were used to encode this integer.
+     *
+     * @param in to read from
+     * @return The integer read, as a long to avoid signedness
+     *
+     * @throws IllegalArgumentException if variable-length value does not terminate
+     *                                  after 5 bytes have been read
+     * @throws IOException              if {@link DataInput} throws {@link IOException}
+     */
+    public static int readVarInt(DataInput in) throws IOException {
+        int raw = readUnsignedVarInt(in);
+        // This undoes the trick in writeSignedVarInt()
+        int temp = (((raw << 31) >> 31) ^ raw) >> 1;
+        // This extra step lets us deal with the largest signed values by treating
+        // negative results from read unsigned methods as like unsigned values.
+        // Must re-flip the top bit if the original read value had it set.
+        return temp ^ (raw & (1 << 31));
     }
 
     /**
@@ -203,23 +213,6 @@ public class Utils {
      */
     public static void writeUnsignedInt(ByteBuffer buffer, int index, long value) {
         buffer.putInt(index, (int) (value & 0xffffffffL));
-    }
-
-    /**
-     * Write the given unsigned integer following the variable-length from
-     * <a href="http://code.google.com/apis/protocolbuffers/docs/encoding.html">
-     * Google Protocol Buffers</a>. Since it the value is not negative Zig-zag is not used.
-     *
-     * @param buffer The buffer to write to
-     * @param index The position in the buffer at which to begin writing
-     * @param value The value to write
-     */
-    public static void writeUnsignedVarInt(ByteBuffer buffer, int index, int value) {
-        while ((value & 0xffffff80) != 0L) {
-            buffer.put((byte) ((value & 0x7f) | 0x80));
-            value >>>= 7;
-        }
-        buffer.put((byte) (value & 0x7f));
     }
 
     /**
@@ -250,6 +243,76 @@ public class Utils {
         buffer[offset]   = (byte) (value >>> 8 * 3);
     }
 
+    /**
+     * Get the little-endian value of an integer as a byte array.
+     * @param value The value to convert to a little-endian array
+     * @return The little-endian encoded array of bytes for the value
+     */
+    public static byte[] writeUnsignedIntLE(int value) {
+        return new byte[] {
+                (byte) (value >> 8 * 0),
+                (byte) (value >> 8 * 1),
+                (byte) (value >> 8 * 2),
+                (byte) (value >> 8 * 3)
+        };
+    }
+
+    /**
+     * Write the given unsigned integer following the variable-length from
+     * <a href="http://code.google.com/apis/protocolbuffers/docs/encoding.html">
+     * Google Protocol Buffers</a> as a byte array. Since it the value is not negative Zig-zag is not used.
+     *
+     * @param value The value to write
+     */
+    public static byte[] writeUnsignedVarInt(int value) {
+        byte[] byteArrayList = new byte[10];    // magic number
+        int i = 0;
+        while ((value & 0xffffff80) != 0L) {
+            byteArrayList[i++] = ((byte) ((value & 0x7f) | 0x80));
+            value >>>= 7;
+        }
+        byteArrayList[i] = ((byte) (value & 0x7f));
+        byte[] out = new byte[i + 1];
+        for (; i >= 0; i--) {
+            out[i] = byteArrayList[i];
+        }
+        return out;
+    }
+
+    /**
+     * Write the given integer following the variable-length from
+     * <a href="http://code.google.com/apis/protocolbuffers/docs/encoding.html">
+     * Google Protocol Buffers</a> as a byte array. Zig-zag encoding is not used.
+     *
+     * @param value The value to write
+     */
+    public static byte[] writeVarInt(int value) {
+        return writeUnsignedVarInt((value << 1) ^ (value >> 31));
+    }
+
+    /**
+     * Number of bytes needed to encode an unsigned integer in variable-length format.
+     *
+     * @param value The unsigned integer
+     */
+    public static int bytesForUnsignedVarIntEncoding(int value) {
+        int bytes = 1;
+        while ((value & 0xffffff80) != 0L) {
+            bytes += 1;
+            value >>>= 7;
+        }
+
+        return bytes;
+    }
+
+    /**
+     * Number of bytes needed to encode an integer in variable-length format.
+     *
+     * @param value The unsigned integer
+     */
+    public static int bytesForVarIntEncoding(int value) {
+        return bytesForUnsignedVarIntEncoding((value << 1) ^ (value >> 31));
+    }
 
     /**
      * Get the absolute value of the given number. If the number is Int.MinValue return 0. This is different from

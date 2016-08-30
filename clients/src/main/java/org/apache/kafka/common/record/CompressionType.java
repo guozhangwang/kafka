@@ -26,10 +26,19 @@ public enum CompressionType {
     public final String name;
     public final float rate;
 
-    private CompressionType(int id, String name, float rate) {
+    CompressionType(int id, String name, float rate) {
         this.id = id;
         this.name = name;
         this.rate = rate;
+    }
+
+    public long updateAttributes(long attributes) {
+        return id > 0 ?
+                (attributes | (Records.COMPRESSION_CODEC_MASK & id)) : (attributes);
+    }
+
+    public static CompressionType forAttributes(long attributes) {
+        return CompressionType.forId((int) (attributes & Records.COMPRESSION_CODEC_MASK));
     }
 
     public static CompressionType forId(int id) {

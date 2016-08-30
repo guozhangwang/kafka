@@ -16,9 +16,14 @@
  */
 package org.apache.kafka.common.record;
 
+import org.apache.kafka.common.utils.Bytes;
 import org.apache.kafka.common.utils.Crc32;
+import org.apache.kafka.common.utils.Utils;
 
-import java.nio.ByteBuffer;
+import java.io.DataInput;
+import java.io.IOException;
+import java.util.Arrays;
+import java.util.Comparator;
 
 
 /**
@@ -36,95 +41,101 @@ public final class Record {
 
     // serialized key of the record
     public static final int KEY_SIZE_OFFSET = TIMESTAMP_OFFSET + TIMESTAMP_LENGTH;
-    public static final int KEY_SIZE_LENGTH = 4;
-
-    public static final int KEY_OFFSET = KEY_SIZE_OFFSET + KEY_SIZE_LENGTH;
 
     // serialized value of the record
     public static final int VALUE_SIZE_LENGTH = 4;
-
-    /**
-     * The amount of overhead bytes in a record
-     */
-    public static final int RECORD_OVERHEAD = TIMESTAMP_LENGTH + KEY_SIZE_LENGTH + VALUE_SIZE_LENGTH;
-
-    /**
-     * Specify the mask of timestamp type.
-     * 0 for {@link TimestampType.CREATE_TIME}, 1 for {@link TimestampType.LOG_APPEND_TIME}.
-     */
-    public static final byte TIMESTAMP_TYPE_MASK = 0x08;
-    public static final int TIMESTAMP_TYPE_ATTRIBUTE_OFFSET = 3;
-
-    /**
-     * Compression code for uncompressed records
-     */
-    public static final int NO_COMPRESSION = 0;
 
     /**
      * Timestamp value for records without a timestamp
      */
     public static final long NO_TIMESTAMP = -1L;
 
-    private final ByteBuffer buffer;
+    public static int recordSize(int deltaOffset, byte[] key, byte[] value) {
+        return recordSize(key == null ? 0 : key.length, value == null ? 0 : value.length, deltaOffset);
+    }
 
-    public Record(ByteBuffer buffer) {
-        this.buffer = buffer;
+    public static int recordSize(int deltaOffset, int keySize, int valueSize) {
+        return TIMESTAMP_LENGTH + Utils.bytesForUnsignedVarIntEncoding(deltaOffset)
+                + Utils.bytesForUnsignedVarIntEncoding(keySize) + keySize
+                + VALUE_SIZE_LENGTH + valueSize;
+    }
+
+    private final byte[] key;
+
+    private final byte[] value;
+
+    private final long timestamp;
+
+    private final int deltaOffset;
+
+    /**
+     * A constructor to create a record.
+     *
+     * @param timestamp The timestamp of the record
+     * @param deltaOffset Delta offset of the record compared to its belonged record set base offset
+     * @param key The key of the record (null, if none)
+     * @param value The record value
+     */
+    public Record(long timestamp, int deltaOffset, byte[] key, byte[] value) {
+        this.key = key;
+        this.value = value;
+        this.timestamp = timestamp;
+        this.deltaOffset = deltaOffset;
+    }
+
+    public Record(long timestamp, int deltaOffset, byte[] value) {
+        this(timestamp, deltaOffset, null, value);
     }
 
     /**
-     * A constructor to create a record by always writting the value payload as is and will not do the compression.
-     *
-     * @param timestamp The timestamp of the record
-     * @param key The key of the record (null, if none)
-     * @param value The record value
-     * @param valueOffset The offset into the payload array used to extract payload
-     * @param valueSize The size of the payload to use
+     * Write a record into the specified {@link Compressor}
      */
-    public Record(long timestamp, byte[] key, byte[] value, int valueOffset, int valueSize) {
-        this(ByteBuffer.allocate(recordSize(key == null ? 0 : key.length,
-            value == null ? 0 : valueSize >= 0 ? valueSize : value.length - valueOffset)));
-        write(this.buffer, timestamp, key, value, valueOffset, valueSize);
-        this.buffer.rewind();
-    }
-
-    public Record(long timestamp, byte[] key, byte[] value) {
-        this(timestamp, key, value, 0, -1);
-    }
-
-    public Record(long timestamp, byte[] value) {
-        this(timestamp, null, value);
-    }
-
-    // Write a record to the buffer
-    public static void write(ByteBuffer buffer, long timestamp, byte[] key, byte[] value, int valueOffset, int valueSize) {
-        // construct the compressor with compression type none since this function will not do any
-        // compression but just write the record's payload as is
-        Compressor compressor = new Compressor(buffer, CompressionType.NONE);
-        try {
-            compressor.putRecord(timestamp, key, value, valueOffset, valueSize);
-        } finally {
-            compressor.close();
-        }
-    }
-
-    public static void write(Compressor compressor, long timestamp, byte[] key, byte[] value, int valueOffset, int valueSize) {
+    public static void write(Compressor compressor, long timestamp, int deltaOffset, byte[] key, byte[] value) {
         // write timestamp
         compressor.putLong(timestamp);
+        // write delta offset
+        compressor.put(Utils.writeUnsignedVarInt(deltaOffset));
         // write the key
         if (key == null) {
-            compressor.putInt(-1);
+            compressor.put(Utils.writeVarInt(-1));
         } else {
-            compressor.putInt(key.length);
-            compressor.put(key, 0, key.length);
+            int size = key.length;
+            compressor.put(Utils.writeUnsignedVarInt(size));
+            compressor.put(key, 0, size);
         }
         // write the value
         if (value == null) {
             compressor.putInt(-1);
         } else {
-            int size = valueSize >= 0 ? valueSize : (value.length - valueOffset);
+            int size = value.length;
             compressor.putInt(size);
-            compressor.put(value, valueOffset, size);
+            compressor.put(value, 0, size);
         }
+    }
+
+    /**
+     * Read a record out of the {@link DataInput}
+     */
+    public static Record read(DataInput in) throws IOException {
+        // read timestamp
+        long timestamp = in.readLong();
+
+        // read the delta offset with variable-length encoding
+        int deltaOffset = Utils.readUnsignedVarInt(in);
+
+        // read the key, by reading the key size with variable-length encoding first
+        int keySize = Utils.readVarInt(in);
+        byte[] key = keySize < 0 ? null : new byte[keySize];
+        if (key != null)
+            in.readFully(key);
+
+        // read the value, by reading the value size first
+        int valueSize = in.readInt();
+        byte[] value = valueSize < 0 ? null : new byte[valueSize];
+        if (value != null)
+            in.readFully(value);
+
+        return new Record(timestamp, deltaOffset, key, value);
     }
 
     /**
@@ -156,96 +167,69 @@ public final class Record {
         return crc.getValue();
     }
 
-    public static int recordSize(byte[] key, byte[] value) {
-        return recordSize(key == null ? 0 : key.length, value == null ? 0 : value.length);
-    }
-
-    public static int recordSize(int keySize, int valueSize) {
-        return TIMESTAMP_LENGTH + KEY_SIZE_LENGTH + keySize + VALUE_SIZE_LENGTH + valueSize;
-    }
-
-    public ByteBuffer buffer() {
-        return this.buffer;
-    }
-
     /**
-     * The complete serialized size of this record in bytes (including crc, header attributes, etc)
+     * The complete serialized size of this record in bytes
      */
     public int size() {
-        return buffer.limit();
+        return TIMESTAMP_LENGTH + Utils.bytesForUnsignedVarIntEncoding(deltaOffset)
+                + (key == null ? Utils.bytesForVarIntEncoding(-1) : Utils.bytesForVarIntEncoding(key.length) + key.length)
+                + VALUE_SIZE_LENGTH + value.length;
     }
 
     /**
      * The length of the key in bytes
      */
     public int keySize() {
-        return buffer.getInt(KEY_SIZE_OFFSET);
+        return key.length;
     }
 
     /**
      * Does the record have a key?
      */
     public boolean hasKey() {
-        return keySize() >= 0;
-    }
-
-    /**
-     * The position where the value size is stored
-     */
-    private int valueSizeOffset() {
-        return KEY_OFFSET + Math.max(0, keySize());
+        return key != null;
     }
 
     /**
      * The length of the value in bytes
      */
     public int valueSize() {
-        return buffer.getInt(valueSizeOffset());
+        return value.length;
     }
 
     /**
      * Timestamp of the record
      */
     public long timestamp() {
-        return buffer.getLong(TIMESTAMP_OFFSET);
+        return timestamp;
+    }
+
+    /**
+     * Delta offset of the record within its belonging record set
+     */
+    public int deltaOffset() {
+        return deltaOffset;
     }
 
     /**
      * A ByteBuffer containing the message key
      */
-    public ByteBuffer key() {
-        return sliceDelimited(KEY_SIZE_OFFSET);
+    public byte[] key() {
+        return key;
     }
 
     /**
      * A ByteBuffer containing the value of this record
      */
-    public ByteBuffer value() {
-        return sliceDelimited(valueSizeOffset());
-    }
-
-    /**
-     * Read a size-delimited byte buffer starting at the given offset
-     */
-    private ByteBuffer sliceDelimited(int start) {
-        int size = buffer.getInt(start);
-        if (size < 0) {
-            return null;
-        } else {
-            ByteBuffer b = buffer.duplicate();
-            b.position(start + 4);
-            b = b.slice();
-            b.limit(size);
-            b.rewind();
-            return b;
-        }
+    public byte[] value() {
+        return value;
     }
 
     public String toString() {
         return String.format("Record(timestamp = %d, key = %d bytes, value = %d bytes)",
                 timestamp(),
-                key() == null ? 0 : key().limit(),
-                value() == null ? 0 : value().limit());
+                key() == null ? 0 : keySize(),
+                value() == null ? 0 : valueSize());
     }
 
     public boolean equals(Object other) {
@@ -256,11 +240,19 @@ public final class Record {
         if (!other.getClass().equals(Record.class))
             return false;
         Record record = (Record) other;
-        return this.buffer.equals(record.buffer);
+
+        Comparator<byte[]> comparator = Bytes.BYTES_LEXICO_COMPARATOR;
+
+        return this.timestamp == record.timestamp() &&
+                this.deltaOffset == record.deltaOffset() &&
+                comparator.compare(this.key, record.key()) == 0 &&
+                comparator.compare(this.value, record.value()) ==0;
     }
 
     public int hashCode() {
-        return buffer.hashCode();
+        long result = (timestamp << 16) | deltaOffset;
+        result = (result << 32) | Arrays.hashCode(key);
+        result = (result << 32) | Arrays.hashCode(value);
+        return (int) (result % 0xFFFFFFFFL);
     }
-
 }
