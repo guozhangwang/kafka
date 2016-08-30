@@ -85,7 +85,7 @@ public class Compressor {
     private final ByteBufferOutputStream bufferStream;
     private final int initPos;
 
-    private long numRecords;
+    private int numRecords;
     private long maxTimestamp;
     private long writtenUncompressed;
     private float compressionRate;
@@ -194,7 +194,7 @@ public class Compressor {
     public long putRecord(long timestamp, byte[] key, byte[] value, int valueOffset, int valueSize) {
         // write the record into the underlying stream with this compressor
         maxTimestamp = Math.max(maxTimestamp, timestamp);
-        Record.write(this, timestamp, key, value, valueOffset, valueSize);
+        Record.write(this, timestamp, numRecords, key, value);
 
         // compute the crc as uncompressed bytes
         return Record.computeChecksum(timestamp, key, value, valueOffset, valueSize);
@@ -214,7 +214,7 @@ public class Compressor {
         writtenUncompressed += size;
     }
 
-    public long numRecords() {
+    public int numRecords() {
         return numRecords;
     }
 
