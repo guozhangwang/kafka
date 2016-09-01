@@ -86,9 +86,9 @@ public class Compressor {
     private final int initPos;
 
     private int numRecords;
-    private long maxTimestamp;
     private long writtenUncompressed;
     private float compressionRate;
+
 
     public Compressor(ByteBuffer buffer, CompressionType type) {
         this.type = type;
@@ -97,7 +97,6 @@ public class Compressor {
         this.numRecords = 0;
         this.writtenUncompressed = 0;
         this.compressionRate = 1;
-        this.maxTimestamp = Record.NO_TIMESTAMP;
 
         // leave space for the message set header and move the starting position
         // to the offset of the messages
@@ -191,22 +190,8 @@ public class Compressor {
      *
      * @return CRC of the record
      */
-    public long putRecord(long timestamp, byte[] key, byte[] value, int valueOffset, int valueSize) {
-        // write the record into the underlying stream with this compressor
-        maxTimestamp = Math.max(maxTimestamp, timestamp);
-        Record.write(this, timestamp, numRecords, key, value);
-
-        // compute the crc as uncompressed bytes
-        return Record.computeChecksum(timestamp, key, value, valueOffset, valueSize);
-    }
-
-    /**
-     * Put a record into the underlying stream
-     *
-     * @return CRC of the record
-     */
-    public long putRecord(long timestamp, byte[] key, byte[] value) {
-        return putRecord(timestamp, key, value, 0, -1);
+    public long putRecord(long timestampDelta, int offsetDelta, byte[] key, byte[] value) {
+        return Record.write(this, timestampDelta, offsetDelta, key, value);
     }
 
     public void recordWritten(int size) {

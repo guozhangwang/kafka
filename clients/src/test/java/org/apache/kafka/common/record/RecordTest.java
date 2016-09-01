@@ -35,11 +35,15 @@ import org.junit.runners.Parameterized.Parameters;
 @RunWith(value = Parameterized.class)
 public class RecordTest {
 
+    private long timestamp;
+    private int offset;
     private byte[] key;
     private byte[] value;
     private Record record;
 
-    public RecordTest(long timestamp, byte[] key, byte[] value) {
+    public RecordTest(long timestamp, int offset, byte[] key, byte[] value) {
+        this.timestamp = timestamp;
+        this.offset = offset;
         this.key = key == null ? null : key;
         this.value = value == null ? null : value;
         this.record = new Record(timestamp, 0, key, value);
@@ -56,16 +60,28 @@ public class RecordTest {
             assertEquals(value.length, record.valueSize());
     }
 
+    @Test
+    public void testChecksum() {
+        assertEquals(record.checksum(), record.computeChecksum());
+        assertEquals(record.checksum(), Record.computeChecksum(
+                this.timestamp,
+                this.offset,
+                this.key,
+                this.value));
+        assertTrue(record.isValid());
+    }
+
     @Parameters
     public static Collection<Object[]> data() {
         byte[] payload = new byte[1000];
         Arrays.fill(payload, (byte) 1);
         List<Object[]> values = new ArrayList<>();
         for (long timestamp : Arrays.asList(Record.NO_TIMESTAMP, 0L, 1L))
-            for (byte[] key : Arrays.asList(null, "".getBytes(), "key".getBytes(), payload))
-                for (byte[] value : Arrays.asList(null, "".getBytes(), "value".getBytes(), payload))
-                    for (CompressionType compression : CompressionType.values())
-                        values.add(new Object[] {timestamp, key, value, compression});
+            for (int offset : Arrays.asList(0, 1))
+                for (byte[] key : Arrays.asList(null, "".getBytes(), "key".getBytes(), payload))
+                    for (byte[] value : Arrays.asList(null, "".getBytes(), "value".getBytes(), payload))
+                        values.add(new Object[] {timestamp, offset, key, value});
+
         return values;
     }
 

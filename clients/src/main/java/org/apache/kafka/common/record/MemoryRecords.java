@@ -16,7 +16,6 @@ import java.io.DataInputStream;
 import java.io.EOFException;
 import java.io.IOException;
 import java.nio.ByteBuffer;
-import java.util.ArrayDeque;
 import java.util.Iterator;
 
 import org.apache.kafka.common.KafkaException;
@@ -62,6 +61,9 @@ public class MemoryRecords implements Records {
     // producer context of the record set
     private ProducerContext context;
 
+    // base timestamp of the record set
+    private long baseTimestamp;
+
     // Construct a writable memory records
     private MemoryRecords(ByteBuffer buffer, CompressionType type, int writeLimit) {
         this.buffer = buffer;
@@ -72,6 +74,7 @@ public class MemoryRecords implements Records {
         this.writeLimit = writeLimit;
         this.compressor = new Compressor(buffer, type);
         this.context = null;
+        this.baseTimestamp = Record.NO_TIMESTAMP;
     }
 
     // Construct a readable memory records
@@ -84,6 +87,7 @@ public class MemoryRecords implements Records {
         this.writeLimit = WRITE_LIMIT_FOR_READABLE_ONLY;
         this.compressor = null;
         this.context = context();
+        this.baseTimestamp = timestamp();
     }
 
     public static MemoryRecords emptyRecords(ByteBuffer buffer, CompressionType type, int writeLimit) {
@@ -100,14 +104,23 @@ public class MemoryRecords implements Records {
     }
 
     /**
-     * Append the given record and offset to the buffer
+     * Append the given record and offset to the buffer, this is for unit test only
      */
     public AppendResult append(Record record) {
         if (!writable)
             throw new IllegalStateException("Memory records is not writable");
 
+        // the delta offset of this record is computed
+        // as the number of currently appended records
+        int deltaOffset = compressor.numRecords();
+
+        // compute the delta timestamp
+        if (baseTimestamp == Record.NO_TIMESTAMP)
+            baseTimestamp = record.timestamp();
+        long timestampOffset = record.timestamp() - baseTimestamp;
+
         int size = record.size();
-        long crc = compressor.putRecord(record.timestamp(), record.key(), record.value());
+        long crc = compressor.putRecord(timestampOffset, deltaOffset, record.key(), record.value());
         compressor.recordWritten(size);
 
         return new AppendResult(crc, size);
@@ -124,8 +137,24 @@ public class MemoryRecords implements Records {
         // as the number of currently appended records
         int deltaOffset = compressor.numRecords();
 
-        int size = Record.recordSize(deltaOffset, key, value);
-        long crc = compressor.putRecord(timestamp, key, value);
+        return append(timestamp, deltaOffset, key, value);
+    }
+
+    /**
+     * Append a new record and offset to the buffer,
+     * this is used for unit test only
+     */
+    public AppendResult append(long timestamp, int offset, byte[] key, byte[] value) {
+        if (!writable)
+            throw new IllegalStateException("Memory records is not writable");
+
+        // compute the delta timestamp
+        if (baseTimestamp == Record.NO_TIMESTAMP)
+            baseTimestamp = timestamp;
+        long timestampOffset = timestamp - baseTimestamp;
+
+        int size = Record.recordSize(timestampOffset, offset, key, value);
+        long crc = compressor.putRecord(timestampOffset, offset, key, value);
         compressor.recordWritten(size);
 
         return new AppendResult(crc, size);
@@ -212,18 +241,14 @@ public class MemoryRecords implements Records {
      * The producer context stored with this record set
      */
     public ProducerContext context() {
-        return new ProducerContext(
-                buffer.getLong(initialPosition + PID_OFFSET),
-                buffer.getInt(initialPosition + EPOCH_OFFSET),
-                buffer.getLong(initialPosition + SEQUENCE_NUMBER_OFFSET)
-        );
+        return ProducerContext.read(buffer, initialPosition + PRODUCER_CONTEXT_OFFSET);
     }
 
     /**
-     * Maximum delta offset of this record set
+     * The base timestamp of the record set
      */
-    public int maxDeltaOffset() {
-        return buffer.getInt(initialPosition + MAX_DELTA_OFFSET_OFFSET);
+    public long timestamp() {
+        return buffer.getLong(initialPosition + TIMESTAMP_OFFSET);
     }
 
     /**
@@ -266,9 +291,10 @@ public class MemoryRecords implements Records {
         if (!this.writable)
             return false;
 
+        // use conservative estimate on variable length fields
         return this.compressor.numRecords() == 0 ?
-            this.initialCapacity >= Record.recordSize(compressor.numRecords(), key, value) :
-            this.writeLimit >= this.compressor.estimatedBytesWritten() + Record.recordSize(compressor.numRecords(), key, value);
+            this.initialCapacity >= Record.recordSize(Long.MAX_VALUE, Integer.MAX_VALUE, key, value) :
+            this.writeLimit >= this.compressor.estimatedBytesWritten() + Record.recordSize(Long.MAX_VALUE, Integer.MAX_VALUE, key, value);
     }
 
     public boolean isFull() {
@@ -280,45 +306,45 @@ public class MemoryRecords implements Records {
      */
     public void close() {
         if (writable) {
-            // close the compressor
+            // close the compressor and get the resulted buffer (since it may gets expanded while appending and closing)
             compressor.close();
+            buffer = compressor.buffer();
 
-            // start filling in the header of the record set by setting the starting position
-            // to the initialized position first
-            int pos = buffer.position();
-            buffer.position(initialPosition);
-            // first set the base offset as number of records, in fact it does not matter what values
-            // are set on the producer end since it is always going to be overridden on the server side.
-            buffer.putLong((long) compressor.numRecords());
+            // compute the record size minus the record set overhead
+            int size = buffer.position() - initialPosition - Records.RECORDS_OVERHEAD;
+            int crcSize = buffer.position() - initialPosition - Records.MAGIC_OFFSET;
+
+            // start filling in the header of the record set, starting with the base offset
+            // as number of records, in fact it does not matter what values are set on the
+            // producer end since it is always going to be overridden on the server side
+            buffer.putLong(initialPosition, (long) compressor.numRecords());
+
             // set the record set size
-            buffer.putInt(pos - initialPosition - Records.RECORDS_OVERHEAD);
+            buffer.putInt(initialPosition + SIZE_OFFSET, size);
+
             // compute and fill the crc
-            long crc = computeChecksum(buffer, initialPosition + Records.MAGIC_OFFSET, pos - initialPosition - Records.MAGIC_OFFSET);
+            long crc = computeChecksum(buffer, initialPosition + Records.MAGIC_OFFSET, crcSize);
             Utils.writeUnsignedInt(buffer, initialPosition + Records.CRC_OFFSET, crc);
-            buffer.position(initialPosition + Records.MAGIC_OFFSET);
+
             // fill the magic byte
-            buffer.put(CURRENT_MAGIC_VALUE);
+            buffer.put(initialPosition + Records.MAGIC_OFFSET, CURRENT_MAGIC_VALUE);
+
             // compute and fill the attributes, assuming the timestamp type is TimestampType.CREATE_TIME
             long attributes = computeAttributes(compressor.type(), TimestampType.CREATE_TIME);
-            buffer.putInt((int) attributes);
+            buffer.putInt(initialPosition + Records.ATTRIBUTES_OFFSET, (int) attributes);
+
             // write the producer context
             if (context == null)
                 throw new IllegalStateException("The producer context should not be null");
-            buffer.putLong(context.id());
-            buffer.putInt(context.epoch());
-            buffer.putLong(context.sequence());
+            context.write(buffer, initialPosition + Records.PRODUCER_CONTEXT_OFFSET);
 
-            // write the delta offset as the number of records
+            // write the base timestamp of the record set
             buffer.putInt(compressor.numRecords());
 
             // write number of records
             buffer.putInt(compressor.numRecords());
 
-            // reset the position
-            buffer.position(pos);
-
-            // flip the underlying buffer to be ready for reads
-            buffer = compressor.buffer();
+            // flip the buffer to be ready for reads
             buffer.flip();
 
             // reset the writable flag
@@ -399,7 +425,8 @@ public class MemoryRecords implements Records {
 
                 return new RecordsIterator(Compressor.wrapForInput(new ByteBufferInputStream(this.buffer), compressionType, magic), offset, timestampType, numRecords);
             } else {
-                // it is an older versioned record set, use nested iterator
+                // TODO: it is an older versioned record set, use nested iterator
+                throw new UnsupportedOperationException("Older version not supported");
             }
         }
     }
@@ -477,155 +504,6 @@ public class MemoryRecords implements Records {
             recordsRead += 1;
 
             return record;
-        }
-
-        @Deprecated
-        private static class OldRecordsIterator extends AbstractIterator<LogEntry> {
-            private final ByteBuffer buffer;
-            private final DataInputStream stream;
-            private final CompressionType type;
-            private final boolean shallow;
-            private OldRecordsIterator innerIter;
-
-            // The variables for inner iterator
-            private final ArrayDeque<OldLogEntry> logEntries;
-            private final long absoluteBaseOffset;
-
-            public OldRecordsIterator(ByteBuffer buffer, boolean shallow) {
-                this.type = CompressionType.NONE;
-                this.buffer = buffer;
-                this.shallow = shallow;
-                this.stream = new DataInputStream(new ByteBufferInputStream(buffer));
-                this.logEntries = null;
-                this.absoluteBaseOffset = -1;
-            }
-
-            // Private constructor for inner iterator.
-            private OldRecordsIterator(OldLogEntry entry) {
-                this.type = entry.record().compressionType();
-                this.buffer = entry.record().value();
-                this.shallow = true;
-                this.stream = Compressor.wrapForInput(new ByteBufferInputStream(this.buffer), type, entry.record().magic());
-                long wrapperRecordOffset = entry.offset();
-
-                long wrapperRecordTimestamp = entry.record().timestamp();
-                this.logEntries = new ArrayDeque<>();
-                // If relative offset is used, we need to decompress the entire message first to compute
-                // the absolute offset. For simplicity and because it's a format that is on its way out, we
-                // do the same for message format version 0
-                try {
-                    while (true) {
-                        try {
-                            OldLogEntry logEntry = getNextEntryFromStream();
-                            if (entry.record().magic() == Records.MAGIC_VALUE_V1) {
-                                Record recordWithTimestamp = new Record(
-                                        logEntry.record().buffer(),
-                                        wrapperRecordTimestamp,
-                                        entry.record().timestampType()
-                                );
-                                logEntry = new OldLogEntry(logEntry.offset(), recordWithTimestamp);
-                            }
-                            logEntries.add(logEntry);
-                        } catch (EOFException e) {
-                            break;
-                        }
-                    }
-                    if (entry.record().magic() == Records.MAGIC_VALUE_V1)
-                        this.absoluteBaseOffset = wrapperRecordOffset - logEntries.getLast().offset();
-                    else
-                        this.absoluteBaseOffset = -1;
-                } catch (IOException e) {
-                    throw new KafkaException(e);
-                } finally {
-                    Utils.closeQuietly(stream, "records iterator stream");
-                }
-            }
-
-            /*
-             * Read the next record from the buffer.
-             *
-             * Note that in the compressed message set, each message value size is set as the size of the un-compressed
-             * version of the message value, so when we do de-compression allocating an array of the specified size for
-             * reading compressed value data is sufficient.
-             */
-            @Override
-            protected LogEntry makeNext() {
-                if (innerDone()) {
-                    try {
-                        OldLogEntry entry = getNextEntry();
-                        // No more record to return.
-                        if (entry == null)
-                            return allDone();
-
-                        // Convert offset to absolute offset if needed.
-                        if (absoluteBaseOffset >= 0) {
-                            long absoluteOffset = absoluteBaseOffset + entry.offset();
-                            entry = new OldLogEntry(absoluteOffset, entry.record());
-                        }
-
-                        // decide whether to go shallow or deep iteration if it is compressed
-                        CompressionType compression = entry.record().compressionType();
-                        if (compression == CompressionType.NONE || shallow) {
-                            return new LogEntry(entry.offset(), new Record());
-                        } else {
-                            // init the inner iterator with the value payload of the message,
-                            // which will de-compress the payload to a set of messages;
-                            // since we assume nested compression is not allowed, the deep iterator
-                            // would not try to further decompress underlying messages
-                            // There will be at least one element in the inner iterator, so we don't
-                            // need to call hasNext() here.
-                            innerIter = new OldRecordsIterator(entry);
-                            return innerIter.next();
-                        }
-                    } catch (EOFException e) {
-                        return allDone();
-                    } catch (IOException e) {
-                        throw new KafkaException(e);
-                    }
-                } else {
-                    return innerIter.next();
-                }
-            }
-
-            private OldLogEntry getNextEntry() throws IOException {
-                if (logEntries != null)
-                    return getNextEntryFromEntryList();
-                else
-                    return getNextEntryFromStream();
-            }
-
-            private OldLogEntry getNextEntryFromEntryList() {
-                return logEntries.isEmpty() ? null : logEntries.remove();
-            }
-
-            private OldLogEntry getNextEntryFromStream() throws IOException {
-                // read the offset
-                long offset = stream.readLong();
-                // read record size
-                int size = stream.readInt();
-                if (size < 0)
-                    throw new IllegalStateException("Record with size " + size);
-                // read the record, if compression is used we cannot depend on size
-                // and hence has to do extra copy
-                ByteBuffer rec;
-                if (type == CompressionType.NONE) {
-                    rec = buffer.slice();
-                    int newPos = buffer.position() + size;
-                    if (newPos > buffer.limit())
-                        return null;
-                    buffer.position(newPos);
-                    rec.limit(size);
-                } else {
-                    byte[] recordBuffer = new byte[size];
-                    stream.readFully(recordBuffer, 0, size);
-                    rec = ByteBuffer.wrap(recordBuffer);
-                }
-                return new OldLogEntry(offset, MemoryRecords.readableRecords(rec));
-            }
-
-            private boolean innerDone() {
-                return innerIter == null || !innerIter.hasNext();
-            }
         }
     }
 }

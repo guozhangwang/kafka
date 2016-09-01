@@ -46,37 +46,26 @@ public interface Records extends Iterable<LogEntry> {
     int ATTRIBUTES_OFFSET = MAGIC_OFFSET + MAGIC_LENGTH;
     int ATTRIBUTE_LENGTH = 4;
 
-    // TODO: may need to rename this producer id of the record set
-    int PID_OFFSET = ATTRIBUTES_OFFSET + ATTRIBUTE_LENGTH;
-    int PID_LENGTH = 8;
+    // producer context of the record set
+    int PRODUCER_CONTEXT_OFFSET = ATTRIBUTES_OFFSET + ATTRIBUTE_LENGTH;
+    int PRODUCER_CONTEXT_LENGTH = ProducerContext.TOTAL_LENGTH;
 
-    // producer epoch number of the record set
-    int EPOCH_OFFSET = PID_OFFSET + PID_LENGTH;
-    int EPOCH_LENGTH = 4;
-
-    // producer sequence number of the record set
-    int SEQUENCE_NUMBER_OFFSET = EPOCH_OFFSET + EPOCH_LENGTH;
-    int SEQUENCE_NUMBER_LENGTH = 8;
-
-    // max delta offset of the record set
-    int MAX_DELTA_OFFSET_OFFSET = SEQUENCE_NUMBER_OFFSET + SEQUENCE_NUMBER_LENGTH;
-    int MAX_DELTA_OFFSET_LENGTH = 4;
+    // base timestamp of the record set
+    int TIMESTAMP_OFFSET = PRODUCER_CONTEXT_OFFSET + PRODUCER_CONTEXT_LENGTH;
+    int TIMESTAMP_LENGTH = 8;
 
     // number of records in this record set
-    int NUM_RECORDS_OFFSET = MAX_DELTA_OFFSET_OFFSET + MAX_DELTA_OFFSET_LENGTH;
+    int NUM_RECORDS_OFFSET = TIMESTAMP_OFFSET + TIMESTAMP_LENGTH;
     int NUM_RECORDS_LENGTH = 4;
 
     /**
      * The size for the record set header
      */
-    int RECORDS_HEADER_SIZE_V0 = OFFSET_LENGTH + SIZE_LENGTH;
+    int RECORDS_HEADER_SIZE_V0 = SIZE_OFFSET + SIZE_LENGTH;
 
-    int RECORDS_HEADER_SIZE_V1 = OFFSET_LENGTH + SIZE_LENGTH;
+    int RECORDS_HEADER_SIZE_V1 = SIZE_OFFSET + SIZE_LENGTH;
 
-    int RECORDS_HEADER_SIZE_V2 = OFFSET_LENGTH + SIZE_LENGTH +
-            CRC_LENGTH + MAGIC_LENGTH + ATTRIBUTE_LENGTH +
-            PID_LENGTH + EPOCH_LENGTH + SEQUENCE_NUMBER_LENGTH +
-            MAX_DELTA_OFFSET_LENGTH + NUM_RECORDS_LENGTH;
+    int RECORDS_HEADER_SIZE_V2 = NUM_RECORDS_OFFSET + NUM_RECORDS_LENGTH;
 
     int RECORDS_OVERHEAD = OFFSET_LENGTH + SIZE_LENGTH;
 

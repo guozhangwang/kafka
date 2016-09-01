@@ -65,6 +65,7 @@ public class MemoryRecordsTest {
                     LogEntry entry = iter.next();
                     assertEquals((long) i, entry.offset());
                     assertEquals(list.get(i), entry.record());
+                    entry.record().ensureValid();
                 }
                 assertFalse(iter.hasNext());
             }

@@ -152,7 +152,7 @@ public class Utils {
      * Also update the index to indicate how many bytes were used to encode this integer.
      *
      * @param in to read from
-     * @return The integer read, as a long to avoid signedness
+     * @return The integer read (MUST BE TREATED WITH SPECIAL CARE TO AVOID SIGNEDNESS)
      *
      * @throws IllegalArgumentException if variable-length value does not terminate
      *                                  after 5 bytes have been read
@@ -174,11 +174,36 @@ public class Utils {
     }
 
     /**
+     * Read an unsigned long stored in variable-length format.
+     * Also update the index to indicate how many bytes were used to encode this long.
+     *
+     * @param in to read from
+     * @return The integer read (MUST BE TREATED WITH SPECIAL CARE TO AVOID SIGNEDNESS)
+     *
+     * @throws IllegalArgumentException if variable-length value does not terminate
+     *                                  after 5 bytes have been read
+     * @throws IOException              if {@link DataInput} throws {@link IOException}
+     */
+    public static long readUnsignedVarLong(DataInput in) throws IOException {
+        long value = 0L;
+        int i = 0;
+        long b;
+        while (((b = in.readByte()) & 0x80L) != 0) {
+            value |= (b & 0x7F) << i;
+            i += 7;
+            if (i > 63) {
+                throw new IllegalArgumentException("Variable length quantity is too long");
+            }
+        }
+        return value | (b << i);
+    }
+
+    /**
      * Read an integer stored in variable-length format using Zig-zag decoding.
      * Also update the index to indicate how many bytes were used to encode this integer.
      *
      * @param in to read from
-     * @return The integer read, as a long to avoid signedness
+     * @return The integer read (MUST BE TREATED WITH SPECIAL CARE TO AVOID SIGNEDNESS)
      *
      * @throws IllegalArgumentException if variable-length value does not terminate
      *                                  after 5 bytes have been read
@@ -192,6 +217,27 @@ public class Utils {
         // negative results from read unsigned methods as like unsigned values.
         // Must re-flip the top bit if the original read value had it set.
         return temp ^ (raw & (1 << 31));
+    }
+
+    /**
+     * Read a long stored in variable-length format using Zig-zag decoding.
+     * Also update the index to indicate how many bytes were used to encode this long.
+     *
+     * @param in to read from
+     * @return The integer read (MUST BE TREATED WITH SPECIAL CARE TO AVOID SIGNEDNESS)
+     *
+     * @throws IllegalArgumentException if variable-length value does not terminate
+     *                                  after 5 bytes have been read
+     * @throws IOException              if {@link DataInput} throws {@link IOException}
+     */
+    public static long readVarLong(DataInput in) throws IOException {
+        long raw = readUnsignedVarLong(in);
+        // This undoes the trick in writeSignedVarLong()
+        long temp = (((raw << 63) >> 63) ^ raw) >> 1;
+        // This extra step lets us deal with the largest signed values by treating
+        // negative results from read unsigned methods as like unsigned values
+        // Must re-flip the top bit if the original read value had it set.
+        return temp ^ (raw & (1L << 63));
     }
 
     /**
@@ -280,6 +326,28 @@ public class Utils {
     }
 
     /**
+     * Write the given unsigned long following the variable-length from
+     * <a href="http://code.google.com/apis/protocolbuffers/docs/encoding.html">
+     * Google Protocol Buffers</a> as a byte array. Since it the value is not negative Zig-zag is not used.
+     *
+     * @param value The value to write
+     */
+    public static byte[] writeUnsignedVarLong(long value) {
+        byte[] byteArrayList = new byte[20];    // magic number
+        int i = 0;
+        while ((value & 0xFFFFFFFFFFFFFF80L) != 0L) {
+            byteArrayList[i++] = ((byte) ((value & 0x7F) | 0x80));
+            value >>>= 7;
+        }
+        byteArrayList[i] = ((byte) (value & 0x7F));
+        byte[] out = new byte[i + 1];
+        for (; i >= 0; i--) {
+            out[i] = byteArrayList[i];
+        }
+        return out;
+    }
+
+    /**
      * Write the given integer following the variable-length from
      * <a href="http://code.google.com/apis/protocolbuffers/docs/encoding.html">
      * Google Protocol Buffers</a> as a byte array. Zig-zag encoding is not used.
@@ -288,6 +356,17 @@ public class Utils {
      */
     public static byte[] writeVarInt(int value) {
         return writeUnsignedVarInt((value << 1) ^ (value >> 31));
+    }
+
+    /**
+     * Write the given integer following the variable-length from
+     * <a href="http://code.google.com/apis/protocolbuffers/docs/encoding.html">
+     * Google Protocol Buffers</a> as a byte array. Zig-zag encoding is not used.
+     *
+     * @param value The value to write
+     */
+    public static byte[] writeVarLong(long value) {
+        return writeUnsignedVarLong((value << 1) ^ (value >> 63));
     }
 
     /**
@@ -306,12 +385,36 @@ public class Utils {
     }
 
     /**
+     * Number of bytes needed to encode an unsigned long in variable-length format.
+     *
+     * @param value The unsigned integer
+     */
+    public static int bytesForUnsignedVarLongEncoding(long value) {
+        int bytes = 1;
+        while ((value & 0xFFFFFFFFFFFFFF80L) != 0L) {
+            bytes += 1;
+            value >>>= 7;
+        }
+
+        return bytes;
+    }
+
+    /**
      * Number of bytes needed to encode an integer in variable-length format.
      *
      * @param value The unsigned integer
      */
     public static int bytesForVarIntEncoding(int value) {
         return bytesForUnsignedVarIntEncoding((value << 1) ^ (value >> 31));
+    }
+
+    /**
+     * Number of bytes needed to encode an integer in variable-length format.
+     *
+     * @param value The unsigned integer
+     */
+    public static int bytesForVarLongEncoding(long value) {
+        return bytesForUnsignedVarLongEncoding((value << 1) ^ (value >> 63));
     }
 
     /**

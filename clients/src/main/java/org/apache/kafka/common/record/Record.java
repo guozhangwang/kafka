@@ -32,15 +32,11 @@ import java.util.Comparator;
 public final class Record {
 
     /**
-     * The current offset and size for all the fixed-length fields
+     * The current size for all the fixed-length fields
      */
 
-    // timestamp of the record
-    public static final int TIMESTAMP_OFFSET = 0;
-    public static final int TIMESTAMP_LENGTH = 8;
-
-    // serialized key of the record
-    public static final int KEY_SIZE_OFFSET = TIMESTAMP_OFFSET + TIMESTAMP_LENGTH;
+    // crc of the record set
+    public static final int CRC_LENGTH = 4;
 
     // serialized value of the record
     public static final int VALUE_SIZE_LENGTH = 4;
@@ -50,51 +46,66 @@ public final class Record {
      */
     public static final long NO_TIMESTAMP = -1L;
 
-    public static int recordSize(int deltaOffset, byte[] key, byte[] value) {
-        return recordSize(key == null ? 0 : key.length, value == null ? 0 : value.length, deltaOffset);
+    public static int recordSize(long timestampDelta, int offsetDelta, byte[] key, byte[] value) {
+        return recordSize(timestampDelta, offsetDelta, key == null ? 0 : key.length, value == null ? 0 : value.length);
     }
 
-    public static int recordSize(int deltaOffset, int keySize, int valueSize) {
-        return TIMESTAMP_LENGTH + Utils.bytesForUnsignedVarIntEncoding(deltaOffset)
-                + Utils.bytesForUnsignedVarIntEncoding(keySize) + keySize
-                + VALUE_SIZE_LENGTH + valueSize;
+    public static int recordSize(long timestampDelta, int offsetDelta, int keySize, int valueSize) {
+        return Utils.bytesForVarLongEncoding(timestampDelta)
+                + Utils.bytesForUnsignedVarIntEncoding(offsetDelta)
+                + (keySize == -1 ? Utils.bytesForVarIntEncoding(-1) : Utils.bytesForVarIntEncoding(keySize) + keySize)
+                + VALUE_SIZE_LENGTH + valueSize
+                + CRC_LENGTH;
     }
 
     private final byte[] key;
 
     private final byte[] value;
 
-    private final long timestamp;
+    private final long timestampDelta;
 
-    private final int deltaOffset;
+    private final int offsetDelta;
 
     /**
      * A constructor to create a record.
      *
-     * @param timestamp The timestamp of the record
-     * @param deltaOffset Delta offset of the record compared to its belonged record set base offset
+     * @param timestampDelta The timestamp of the record
+     * @param offsetDelta Delta offset of the record compared to its belonged record set base offset
      * @param key The key of the record (null, if none)
      * @param value The record value
      */
-    public Record(long timestamp, int deltaOffset, byte[] key, byte[] value) {
+    public Record(long timestampDelta, int offsetDelta, byte[] key, byte[] value) {
         this.key = key;
         this.value = value;
-        this.timestamp = timestamp;
-        this.deltaOffset = deltaOffset;
+        this.timestampDelta = timestampDelta;
+        this.offsetDelta = offsetDelta;
     }
 
-    public Record(long timestamp, int deltaOffset, byte[] value) {
-        this(timestamp, deltaOffset, null, value);
+    public Record(long timestampDelta, int offsetDelta, byte[] value) {
+        this(timestampDelta, offsetDelta, null, value);
     }
 
     /**
-     * Write a record into the specified {@link Compressor}
+     * Write a record into the specified {@link Compressor} and return the checksum
      */
-    public static void write(Compressor compressor, long timestamp, int deltaOffset, byte[] key, byte[] value) {
-        // write timestamp
-        compressor.putLong(timestamp);
+    public static long write(Compressor compressor, long timestampDelta, int offsetDelta, byte[] key, byte[] value) {
+        // compute the checksum
+        long crc = Record.computeChecksum(timestampDelta, offsetDelta, key, value);
+
+        write(compressor, timestampDelta, offsetDelta, key, value, crc);
+
+        return crc;
+    }
+
+    /**
+     * Write a record into the specified {@link Compressor} along with the expected checksum,
+     * this is used for unit test only
+     */
+    public static long write(Compressor compressor, long timestampDelta, int offsetDelta, byte[] key, byte[] value, long crc) {
+        // write delta timestamp
+        compressor.put(Utils.writeVarLong(timestampDelta));
         // write delta offset
-        compressor.put(Utils.writeUnsignedVarInt(deltaOffset));
+        compressor.put(Utils.writeUnsignedVarInt(offsetDelta));
         // write the key
         if (key == null) {
             compressor.put(Utils.writeVarInt(-1));
@@ -111,17 +122,22 @@ public final class Record {
             compressor.putInt(size);
             compressor.put(value, 0, size);
         }
+
+        // write the checksum
+        compressor.putInt((int) (crc & 0xffffffffL));
+
+        return crc;
     }
 
     /**
      * Read a record out of the {@link DataInput}
      */
     public static Record read(DataInput in) throws IOException {
-        // read timestamp
-        long timestamp = in.readLong();
+        // read delta timestamp
+        long timestampDelta = Utils.readVarLong(in);
 
         // read the delta offset with variable-length encoding
-        int deltaOffset = Utils.readUnsignedVarInt(in);
+        int offsetDelta = Utils.readUnsignedVarInt(in);
 
         // read the key, by reading the key size with variable-length encoding first
         int keySize = Utils.readVarInt(in);
@@ -135,17 +151,20 @@ public final class Record {
         if (value != null)
             in.readFully(value);
 
-        return new Record(timestamp, deltaOffset, key, value);
+        return new Record(timestampDelta, offsetDelta, key, value);
     }
 
     /**
-     * Compute the CRC (checksum) of the record from the attributes, key and value payloads
+     * Compute the CRC (checksum) of the record from the timestamp delta, offset delta, key and value payloads
      */
-    public static long computeChecksum(long timestamp, byte[] key, byte[] value, int valueOffset, int valueSize) {
+    public static long computeChecksum(long timestampDelta, int offsetDelta, byte[] key, byte[] value) {
         Crc32 crc = new Crc32();
 
-        // update for the timestamp
-        crc.updateLong(timestamp);
+        // update for the delta timestamp
+        crc.updateLong(timestampDelta);
+
+        // update for the delta offset
+        crc.updateInt(offsetDelta);
 
         // update for the key
         if (key == null) {
@@ -159,9 +178,8 @@ public final class Record {
         if (value == null) {
             crc.updateInt(-1);
         } else {
-            int size = valueSize >= 0 ? valueSize : (value.length - valueOffset);
-            crc.updateInt(size);
-            crc.update(value, valueOffset, size);
+            crc.updateInt(value.length);
+            crc.update(value, 0, value.length);
         }
 
         return crc.getValue();
@@ -171,16 +189,39 @@ public final class Record {
      * The checksum of this record based on its fields
      */
     public long checksum() {
-        return computeChecksum(timestamp, key, value, 0, -1);
+        return computeChecksum(timestampDelta, offsetDelta, key, value);
+    }
+
+    /**
+     * Returns true if the crc stored with the record matches the crc computed off the record contents
+     */
+    public boolean isValid() {
+        return checksum() == computeChecksum();
+    }
+
+    /**
+     * Throw an InvalidRecordException if isValid is false for this record
+     */
+    public void ensureValid() {
+        if (!isValid())
+            throw new InvalidRecordException("Record is corrupt (stored crc = " + checksum()
+                    + ", computed crc = "
+                    + computeChecksum()
+                    + ")");
+    }
+
+    /**
+     * Compute the checksum of the record from the record contents
+     */
+    public long computeChecksum() {
+        return computeChecksum(this.timestampDelta, this.offsetDelta, this.key, this.value);
     }
 
     /**
      * The complete serialized size of this record in bytes
      */
     public int size() {
-        return TIMESTAMP_LENGTH + Utils.bytesForUnsignedVarIntEncoding(deltaOffset)
-                + (key == null ? Utils.bytesForVarIntEncoding(-1) : Utils.bytesForVarIntEncoding(key.length) + key.length)
-                + VALUE_SIZE_LENGTH + value.length;
+        return Record.recordSize(timestampDelta, offsetDelta, key, value);
     }
 
     /**
@@ -208,14 +249,21 @@ public final class Record {
      * Timestamp of the record
      */
     public long timestamp() {
-        return timestamp;
+        return timestampDelta;
+    }
+
+    /**
+     * Offset of the record
+     */
+    public int offset() {
+        return offsetDelta;
     }
 
     /**
      * Delta offset of the record within its belonging record set
      */
     public int deltaOffset() {
-        return deltaOffset;
+        return offsetDelta;
     }
 
     /**
@@ -233,8 +281,9 @@ public final class Record {
     }
 
     public String toString() {
-        return String.format("Record(timestamp = %d, key = %d bytes, value = %d bytes)",
+        return String.format("Record(timestamp delta = %d, offset delta = %d, key = %d bytes, value = %d bytes)",
                 timestamp(),
+                offset(),
                 key() == null ? 0 : keySize(),
                 value() == null ? 0 : valueSize());
     }
@@ -250,14 +299,14 @@ public final class Record {
 
         Comparator<byte[]> comparator = Bytes.BYTES_LEXICO_COMPARATOR;
 
-        return this.timestamp == record.timestamp() &&
-                this.deltaOffset == record.deltaOffset() &&
+        return this.timestampDelta == record.timestamp() &&
+                this.offsetDelta == record.deltaOffset() &&
                 comparator.compare(this.key, record.key()) == 0 &&
                 comparator.compare(this.value, record.value()) ==0;
     }
 
     public int hashCode() {
-        long result = (timestamp << 16) | deltaOffset;
+        long result = (timestampDelta << 32) | offsetDelta;
         result = (result << 32) | Arrays.hashCode(key);
         result = (result << 32) | Arrays.hashCode(value);
         return (int) (result % 0xFFFFFFFFL);

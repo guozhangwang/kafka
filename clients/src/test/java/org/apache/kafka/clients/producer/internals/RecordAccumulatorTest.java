@@ -63,7 +63,7 @@ public class RecordAccumulatorTest {
     private SystemTime systemTime = new SystemTime();
     private byte[] key = "key".getBytes();
     private byte[] value = "value".getBytes();
-    private int msgSize = Records.RECORDS_HEADER_SIZE_V2 + Record.recordSize(0, key, value);
+    private int msgSize = Records.RECORDS_HEADER_SIZE_V2 + Record.recordSize(0L, 0, key, value);
     private Cluster cluster = new Cluster(Arrays.asList(node1, node2), Arrays.asList(part1, part2, part3), Collections.<String>emptySet(), Collections.<String>emptySet());
     private Metrics metrics = new Metrics(time);
     private final long maxBlockTimeMs = 1000;
