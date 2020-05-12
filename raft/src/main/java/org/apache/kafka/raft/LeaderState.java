@@ -18,6 +18,7 @@ package org.apache.kafka.raft;
 
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Map;
@@ -30,7 +31,7 @@ public class LeaderState implements EpochState {
     private final int epoch;
     private final long epochStartOffset;
     private OptionalLong highWatermark = OptionalLong.empty();
-    private Map<Integer, ReplicaState> voterReplicaStates = new HashMap<>();
+    private final Map<Integer, ReplicaState> voterReplicaStates = new HashMap<>();
 
     protected LeaderState(int localId, int epoch, long epochStartOffset, Set<Integer> voters) {
         this.localId = localId;
@@ -39,7 +40,7 @@ public class LeaderState implements EpochState {
 
         for (int voterId : voters) {
             boolean hasEndorsedLeader = voterId == localId;
-            this.voterReplicaStates.put(voterId, new ReplicaState(voterId, hasEndorsedLeader, OptionalLong.empty()));
+            this.voterReplicaStates.put(voterId, new ReplicaState(voterId, hasEndorsedLeader));
         }
     }
 
@@ -91,6 +92,35 @@ public class LeaderState implements EpochState {
         return false;
     }
 
+    private long updateLastFetchTimestamp() {
+        // Find the latest timestamp which is fetched by a majority of replicas (the leader counts)
+        ArrayList<ReplicaState> followersByDescendingFetchTimestamp = new ArrayList<>(this.voterReplicaStates.values());
+        followersByDescendingFetchTimestamp.sort(FETCH_TIMESTAMP_COMPARATOR);
+        int indexOfTimestamp = voterReplicaStates.size() / 2;
+        OptionalLong majorityFetchTimestamp = followersByDescendingFetchTimestamp.get(indexOfTimestamp).lastFetchTimestamp;
+
+        if (majorityFetchTimestamp.isPresent()) {
+            return majorityFetchTimestamp.getAsLong();
+        } else {
+            // Indicating that we do not have received for a majority of replicas yet and hence should not update timestamp
+            return -1L;
+        }
+    }
+
+    /**
+     * @return The updated lower bound of fetch timestamps for a majority of quorum; -1 indicating that we have
+     *         not received fetch from the majority yet
+     */
+    public long updateFetchTimestamp(int remoteNodeId, long timestamp) {
+        ReplicaState state = ensureValidVoter(remoteNodeId);
+        // To be resilient to system time shifts we do not strictly require the timestamp be monotonically increasing
+        state.lastFetchTimestamp = OptionalLong.of(Math.max(state.lastFetchTimestamp.orElse(-1L), timestamp));
+        return updateLastFetchTimestamp();
+    }
+
+    /**
+     * @return true if the high watermark is updated too
+     */
     public boolean updateEndOffset(int remoteNodeId, long endOffset) {
         ReplicaState state = ensureValidVoter(remoteNodeId);
         state.endOffset.ifPresent(currentEndOffset -> {
@@ -118,17 +148,22 @@ public class LeaderState implements EpochState {
         return updateEndOffset(localId, endOffset);
     }
 
+    public long updateLocalFetchTimestamp(long timestamp) {
+        return updateFetchTimestamp(localId, timestamp);
+    }
+
     private static class ReplicaState implements Comparable<ReplicaState> {
         final int nodeId;
         boolean hasEndorsedLeader;
         OptionalLong endOffset;
+        OptionalLong lastFetchTimestamp;
 
         public ReplicaState(int nodeId,
-                            boolean hasEndorsedLeader,
-                            OptionalLong endOffset) {
+                            boolean hasEndorsedLeader) {
             this.nodeId = nodeId;
             this.hasEndorsedLeader = hasEndorsedLeader;
-            this.endOffset = endOffset;
+            this.endOffset = OptionalLong.empty();
+            this.lastFetchTimestamp = OptionalLong.empty();
         }
 
         @Override
@@ -144,4 +179,14 @@ public class LeaderState implements EpochState {
         }
     }
 
+    private static final Comparator<ReplicaState> FETCH_TIMESTAMP_COMPARATOR = (state, that) -> {
+        if (state.lastFetchTimestamp.equals(that.lastFetchTimestamp))
+            return Integer.compare(state.nodeId, that.nodeId);
+        else if (!state.lastFetchTimestamp.isPresent())
+            return 1;
+        else if (!that.lastFetchTimestamp.isPresent())
+            return -1;
+        else
+            return Long.compare(that.lastFetchTimestamp.getAsLong(), state.lastFetchTimestamp.getAsLong());
+    };
 }

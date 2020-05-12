@@ -67,9 +67,10 @@ import static org.junit.Assert.assertTrue;
 public class KafkaRaftClientTest {
     private final int localId = 0;
     private final int electionTimeoutMs = 10000;
+    private final int electionJitterMs = 100;
+    private final int fetchTimeoutMs = 5000;
     private final int retryBackoffMs = 50;
     private final int requestTimeoutMs = 5000;
-    private final int electionJitterMs = 100;
     private final MockTime time = new MockTime();
     private final MockLog log = new MockLog();
     private final MockNetworkChannel channel = new MockNetworkChannel();
@@ -96,7 +97,7 @@ public class KafkaRaftClientTest {
 
         KafkaRaftClient client = new KafkaRaftClient(channel, log, quorum, time,
             mockAddress(localId), bootstrapServers, electionTimeoutMs, electionJitterMs,
-            retryBackoffMs, requestTimeoutMs, logContext, random);
+                fetchTimeoutMs, retryBackoffMs, requestTimeoutMs, logContext, random);
         client.initialize(new NoOpStateMachine());
         return client;
     }

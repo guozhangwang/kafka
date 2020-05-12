@@ -108,8 +108,10 @@ public class KafkaRaftClient implements RaftClient {
     private final Logger logger;
     private final Time time;
     private final Timer electionTimer;
+    private final Timer fetchTimer;
     private final int electionTimeoutMs;
     private final int electionJitterMs;
+    private final int fetchTimeoutMs;
     private final int retryBackoffMs;
     private final int requestTimeoutMs;
     private final long bootTimestamp;
@@ -131,6 +133,7 @@ public class KafkaRaftClient implements RaftClient {
                            List<InetSocketAddress> bootstrapServers,
                            int electionTimeoutMs,
                            int electionJitterMs,
+                           int fetchTimeoutMs,
                            int retryBackoffMs,
                            int requestTimeoutMs,
                            LogContext logContext,
@@ -140,9 +143,11 @@ public class KafkaRaftClient implements RaftClient {
         this.quorum = quorum;
         this.time = time;
         this.electionTimer = time.timer(electionTimeoutMs);
+        this.fetchTimer = time.timer(fetchTimeoutMs);
         this.retryBackoffMs = retryBackoffMs;
         this.electionTimeoutMs = electionTimeoutMs;
         this.electionJitterMs = electionJitterMs;
+        this.fetchTimeoutMs = fetchTimeoutMs;
         this.requestTimeoutMs = requestTimeoutMs;
         this.bootTimestamp = time.milliseconds();
         this.advertisedListener = advertisedListener;
@@ -176,11 +181,23 @@ public class KafkaRaftClient implements RaftClient {
         });
     }
 
-    private void updateLeaderEndOffset(LeaderState state) {
+    private void updateLeaderEndOffsetAndTimestamp(LeaderState state) {
         if (state.updateLocalEndOffset(log.endOffset())) {
             logger.trace("Leader high watermark updated to {} after end offset updated to {}",
                     state.highWatermark(), log.endOffset());
             applyCommittedRecordsToStateMachine();
+        }
+
+        final long timestamp = state.updateLocalFetchTimestamp(time.milliseconds());
+        if (timestamp > 0) {
+            fetchTimer.resetDeadline(timestamp + fetchTimeoutMs);
+        }
+    }
+
+    private void updateReplicaFetchTimestamp(LeaderState state, int replicaId, long timestamp) {
+        final long lastFetchTimestamp = state.updateFetchTimestamp(replicaId, timestamp);
+        if (lastFetchTimestamp > 0) {
+            fetchTimer.resetDeadline(lastFetchTimestamp + fetchTimeoutMs);
         }
     }
 
@@ -199,10 +216,12 @@ public class KafkaRaftClient implements RaftClient {
 
         if (quorum.isLeader()) {
             electionTimer.reset(Long.MAX_VALUE);
+            fetchTimer.reset(fetchTimeoutMs);
             onBecomeLeader(quorum.leaderStateOrThrow());
         } else if (quorum.isCandidate()) {
             // If the quorum consists of a single node, we can become leader immediately
             electionTimer.reset(electionTimeoutMs);
+            fetchTimer.reset(Long.MAX_VALUE);
             maybeBecomeLeader(quorum.candidateStateOrThrow());
         } else if (quorum.isFollower()) {
             FollowerState state = quorum.followerStateOrThrow();
@@ -210,7 +229,8 @@ public class KafkaRaftClient implements RaftClient {
                 // If we're initializing for the first time, become a candidate immediately
                 becomeCandidate();
             } else {
-                electionTimer.reset(electionTimeoutMs);
+                fetchTimer.reset(Long.MAX_VALUE);
+                electionTimer.reset(Long.MAX_VALUE);
                 if (state.hasLeader())
                     onBecomeFollowerOfElectedLeader(quorum.followerStateOrThrow());
             }
@@ -227,7 +247,7 @@ public class KafkaRaftClient implements RaftClient {
 
     private void onBecomeLeader(LeaderState state) {
         stateMachine.becomeLeader(quorum.epoch());
-        updateLeaderEndOffset(state);
+        updateLeaderEndOffsetAndTimestamp(state);
 
         // Add a control message for faster high watermark advance.
         appendControlRecord(MemoryRecords.withLeaderChangeMessage(
@@ -242,6 +262,7 @@ public class KafkaRaftClient implements RaftClient {
 
         log.assignEpochStartOffset(quorum.epoch(), log.endOffset());
         electionTimer.reset(Long.MAX_VALUE);
+        fetchTimer.reset(fetchTimeoutMs);
         resetConnections();
     }
 
@@ -260,6 +281,8 @@ public class KafkaRaftClient implements RaftClient {
     }
 
     private void becomeCandidate() throws IOException {
+        // after we become candidate, we may not fetch from leader any more
+        fetchTimer.reset(fetchTimeoutMs);
         electionTimer.reset(electionTimeoutMs + randomElectionJitterMs());
         CandidateState state = quorum.becomeCandidate();
         maybeBecomeLeader(state);
@@ -270,23 +293,20 @@ public class KafkaRaftClient implements RaftClient {
         boolean isLeader = quorum.isLeader();
         if (quorum.becomeUnattachedFollower(epoch)) {
             resetConnections();
-
-            if (isLeader) {
-                electionTimer.reset(electionTimeoutMs);
-            }
         }
     }
 
     private void becomeVotedFollower(int candidateId, int epoch) throws IOException {
         if (quorum.becomeVotedFollower(epoch, candidateId)) {
             electionTimer.reset(electionTimeoutMs);
+            fetchTimer.reset(Long.MAX_VALUE);
             resetConnections();
         }
     }
 
     private void onBecomeFollowerOfElectedLeader(FollowerState state) {
         stateMachine.becomeFollower(state.epoch());
-        electionTimer.reset(electionTimeoutMs);
+        fetchTimer.reset(fetchTimeoutMs);
         resetConnections();
     }
 
@@ -406,6 +426,7 @@ public class KafkaRaftClient implements RaftClient {
         // Regardless of our current state, we will become a candidate.
         // Do not become a candidate immediately though.
         electionTimer.reset(randomElectionJitterMs());
+        fetchTimer.reset(Long.MAX_VALUE);
         return buildEndQuorumEpochResponse(Errors.NONE);
     }
 
@@ -456,6 +477,7 @@ public class KafkaRaftClient implements RaftClient {
         if (nextOffsetOpt.isPresent()) {
             return buildOutOfRangeFetchQuorumRecordsResponse(nextOffsetOpt.get(), highWatermark);
         } else if (quorum.isVoter(replicaId)) {
+            updateReplicaFetchTimestamp(state, replicaId, time.milliseconds());
             // Voters can read to the end of the log
             updateReplicaEndOffset(state, replicaId, fetchOffset);
             state.highWatermark().ifPresent(log::updateHighWatermark);
@@ -517,13 +539,13 @@ public class KafkaRaftClient implements RaftClient {
             updateFollowerHighWatermark(state, highWatermark);
         }
 
-        electionTimer.reset(electionTimeoutMs);
+        fetchTimer.reset(fetchTimeoutMs);
     }
 
     private OptionalLong maybeAppendAsLeader(LeaderState state, Records records) {
         if (state.highWatermark().isPresent() && stateMachine.accept(records)) {
             Long baseOffset = log.appendAsLeader(records, quorum.epoch());
-            updateLeaderEndOffset(state);
+            updateLeaderEndOffsetAndTimestamp(state);
             logger.trace("Leader appended records at base offset {}, new end offset is {}", baseOffset, endOffset());
             return OptionalLong.of(baseOffset);
         }
@@ -869,7 +891,9 @@ public class KafkaRaftClient implements RaftClient {
             maybeSendVoteRequestToVoters(currentTimeMs, state);
         } else {
             FollowerState state = quorum.followerStateOrThrow();
-            if (quorum.isObserver() && (!state.hasLeader() || electionTimer.isExpired())) {
+            if (quorum.isObserver() && (!state.hasLeader() || fetchTimer.isExpired())) {
+                maybeSendFindQuorum(currentTimeMs);
+            } else if (quorum.isLeader() && fetchTimer.isExpired()) {
                 maybeSendFindQuorum(currentTimeMs);
             } else if (state.hasLeader()) {
                 int leaderId = state.leaderId();
@@ -915,9 +939,10 @@ public class KafkaRaftClient implements RaftClient {
             pollShutdown(gracefulShutdown);
         } else {
             electionTimer.update();
+            fetchTimer.update();
 
-            if (quorum.isVoter() && electionTimer.isExpired()) {
-                logger.debug("Become candidate due to election timeout");
+            if (quorum.isVoter() && fetchTimer.isExpired()) {
+                logger.debug("Become candidate due to fetch timeout");
                 becomeCandidate();
             }
 
@@ -925,7 +950,8 @@ public class KafkaRaftClient implements RaftClient {
             maybeSendOrHandleAppendRequest(electionTimer.currentTimeMs());
 
             // TODO: Receive time needs to take into account backing off operations that still need doing
-            List<RaftMessage> inboundMessages = channel.receive(electionTimer.remainingMs());
+            final long timeout = Math.min(electionTimer.remainingMs(), fetchTimer.remainingMs());
+            List<RaftMessage> inboundMessages = channel.receive(timeout);
             electionTimer.update();
 
             for (RaftMessage message : inboundMessages)
