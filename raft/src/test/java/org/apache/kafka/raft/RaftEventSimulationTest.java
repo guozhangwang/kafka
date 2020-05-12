@@ -502,7 +502,7 @@ public class RaftEventSimulationTest {
         }
 
         Set<Integer> voters() {
-            return new HashSet<>(voters);
+            return voters;
         }
 
         OptionalLong leaderHighWatermark() {
