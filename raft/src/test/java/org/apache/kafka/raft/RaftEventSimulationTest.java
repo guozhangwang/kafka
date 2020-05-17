@@ -483,7 +483,7 @@ public class RaftEventSimulationTest {
                 nodes.put(nodeId, new PersistentState());
             }
 
-            for (; nodeId < config.numObservers; nodeId++) {
+            for (; nodeId < config.numVoters + config.numObservers; nodeId++) {
                 nodes.put(nodeId, new PersistentState());
             }
         }
@@ -503,7 +503,7 @@ public class RaftEventSimulationTest {
         }
 
         Set<Integer> voters() {
-            return nodes.keySet();
+            return voters;
         }
 
         OptionalLong leaderHighWatermark() {
