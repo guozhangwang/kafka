@@ -74,7 +74,7 @@ public class KafkaRaftClientTest {
     private final int localId = 0;
     private final int electionTimeoutMs = 10000;
     private final int electionJitterMs = 100;
-    private final int fetchTimeoutMs = 5000;
+    private final int fetchTimeoutMs = 50000;   // fetch timeout is usually larger than election timeout
     private final int retryBackoffMs = 50;
     private final int requestTimeoutMs = 5000;
     private final MockTime time = new MockTime();
@@ -106,7 +106,7 @@ public class KafkaRaftClientTest {
         KafkaRaftClient client = new KafkaRaftClient(channel, log, quorum, time,
             mockAddress(localId), bootstrapServers, electionTimeoutMs, electionJitterMs,
             fetchTimeoutMs, retryBackoffMs, requestTimeoutMs, logContext, random);
-        client.initialize(new NoOpStateMachine());
+        client.initialize(stateMachine);
 
         return client;
     }
@@ -302,8 +302,8 @@ public class KafkaRaftClientTest {
         client.poll();
         assertEndQuorumEpochResponse(Errors.NONE);
 
-        // We should still be leader even after election timeout has expired
-        time.sleep(electionTimeoutMs + jitterMs);
+        // We should still be leader as long as fetch timeout has not expired
+        time.sleep(fetchTimeoutMs - 1);
         client.poll();
         assertEquals(ElectionState.withElectedLeader(epoch, localId), quorumStateStore.readElectionState());
     }
@@ -710,7 +710,7 @@ public class KafkaRaftClientTest {
     }
 
     @Test
-    public void testBecomeCandidateAfterElectionTimeout() throws Exception {
+    public void testBecomeCandidateAfterFetchTimeout() throws Exception {
         int otherNodeId = 1;
         int epoch = 5;
         int lastEpoch = 3;
@@ -731,10 +731,11 @@ public class KafkaRaftClientTest {
 
         assertSentFetchQuorumRecordsRequest(epoch, 1L, lastEpoch);
 
-        time.sleep(electionTimeoutMs);
+        time.sleep(fetchTimeoutMs);
 
         client.poll();
         assertSentVoteRequest(epoch + 1, lastEpoch, 1L);
+        assertEquals(ElectionState.withVotedCandidate(epoch + 1, localId), quorumStateStore.readElectionState());
     }
 
     @Test
@@ -779,7 +780,7 @@ public class KafkaRaftClientTest {
     }
 
     @Test
-    public void testObserverFindQuorumAfterElectionTimeout() throws IOException {
+    public void testObserverFindQuorumAfterFetchTimeout() throws IOException {
         int leaderId = 1;
         int epoch = 5;
         Set<Integer> voters = Utils.mkSet(leaderId);
@@ -793,7 +794,7 @@ public class KafkaRaftClientTest {
         client.poll();
         assertEquals(ElectionState.withElectedLeader(epoch, leaderId), quorumStateStore.readElectionState());
 
-        time.sleep(electionTimeoutMs);
+        time.sleep(fetchTimeoutMs);
 
         client.poll();
         assertSentFindQuorumRequest();
@@ -924,8 +925,8 @@ public class KafkaRaftClientTest {
         pollUntilSend(client);
         int fetchCorrelationId = assertSentFetchQuorumRecordsRequest(epoch, 0L, 0);
 
-        // Now await the election timeout and become a candidate
-        time.sleep(electionTimeoutMs);
+        // Now await the fetch timeout and become a candidate
+        time.sleep(fetchTimeoutMs);
         client.poll();
         assertEquals(ElectionState.withVotedCandidate(epoch + 1, localId), quorumStateStore.readElectionState());
 

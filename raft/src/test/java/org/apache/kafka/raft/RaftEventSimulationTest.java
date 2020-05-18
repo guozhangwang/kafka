@@ -53,8 +53,8 @@ import static org.junit.Assume.assumeTrue;
 
 public class RaftEventSimulationTest {
     private static final int ELECTION_TIMEOUT_MS = 1000;
-    private static final int ELECTION_JITTER_MS = 10;
-    private static final int FETCH_TIMEOUT_MS = 1000;
+    private static final int ELECTION_JITTER_MS = 100;
+    private static final int FETCH_TIMEOUT_MS = 5000;
     private static final int RETRY_BACKOFF_MS = 50;
     private static final int REQUEST_TIMEOUT_MS = 500;
 
@@ -260,6 +260,8 @@ public class RaftEventSimulationTest {
             nonPartitionedNodes.remove(1);
 
             scheduler.runUntil(() -> cluster.allReachedHighWatermark(20, nonPartitionedNodes));
+
+            System.out.println(" >>>>>>>>>>>>>>>> Completed " + seed);
         }
     }
 
@@ -316,6 +318,8 @@ public class RaftEventSimulationTest {
             router.filter(4, new PermitAllTraffic());
 
             scheduler.runUntil(() -> cluster.allReachedHighWatermark(30));
+
+            System.out.println(" >>>>>>>>>>>>>>>> Completed " + seed);
         }
     }
 

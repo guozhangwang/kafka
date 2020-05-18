@@ -180,14 +180,14 @@ public class KafkaRaftClient implements RaftClient {
             long newHighWatermark = Math.min(endOffset().offset, highWatermark);
             state.updateHighWatermark(OptionalLong.of(newHighWatermark));
             highWatermarkOpt.ifPresent(log::updateHighWatermark);
-            logger.trace("Follower high watermark updated to {}", newHighWatermark);
+            logger.debug("Follower high watermark updated to {}", newHighWatermark);
             applyCommittedRecordsToStateMachine();
         });
     }
 
     private void updateLeaderEndOffsetAndTimestamp(LeaderState state) {
         if (state.updateLocalEndOffset(log.endOffset())) {
-            logger.trace("Leader high watermark updated to {} after end offset updated to {}",
+            logger.debug("Leader high watermark updated to {} after end offset updated to {}",
                     state.highWatermark(), log.endOffset());
             applyCommittedRecordsToStateMachine();
         }
@@ -207,7 +207,7 @@ public class KafkaRaftClient implements RaftClient {
 
     private void updateReplicaEndOffset(LeaderState state, int replicaId, long endOffset) {
         if (state.updateEndOffset(replicaId, endOffset)) {
-            logger.trace("Leader high watermark updated to {} after replica {} end offset updated to {}",
+            logger.debug("Leader high watermark updated to {} after replica {} end offset updated to {}",
                     state.highWatermark(), replicaId, endOffset);
             applyCommittedRecordsToStateMachine();
         }
@@ -292,10 +292,12 @@ public class KafkaRaftClient implements RaftClient {
     }
 
     private void becomeUnattachedFollower(int epoch) throws IOException {
-        fetchTimer.reset(Long.MAX_VALUE);
-        electionTimer.reset(Long.MAX_VALUE);
         if (quorum.becomeUnattachedFollower(epoch)) {
             resetConnections();
+            if (quorum.isVoter()) {
+                // when we become unattached, we would consider becoming a candidate
+                electionTimer.reset(electionTimeoutMs + randomElectionJitterMs());
+            }
         }
     }
 
@@ -310,6 +312,9 @@ public class KafkaRaftClient implements RaftClient {
     private void onBecomeFollowerOfElectedLeader(FollowerState state) {
         stateMachine.becomeFollower(state.epoch());
         fetchTimer.reset(fetchTimeoutMs);
+        if (quorum.isVoter()) {
+            electionTimer.reset(Long.MAX_VALUE);
+        }
         resetConnections();
     }
 
@@ -362,37 +367,59 @@ public class KafkaRaftClient implements RaftClient {
             return buildVoteResponse(Errors.INVALID_REQUEST, false);
         }
 
+        // we already confirmed that candidateEpoch >= quorum.epoch()
+        final boolean voteGranted;
         if (candidateEpoch > quorum.epoch()) {
-            // If the epoch is larger than our own, then we need to bump our own epoch,
-            // but we leave the vote undecided until we check the offset below
-            becomeUnattachedFollower(candidateEpoch);
-        }
+            final boolean isLeaderOrcandidate = quorum.isLeader() || quorum.isCandidate();
 
-        if (quorum.isLeader()) {
-            logger.debug("Ignoring vote request {} with epoch {} since we are already the leader in this epoch",
-                    request, candidateEpoch);
-            return buildVoteResponse(Errors.NONE, false);
-        } else if (quorum.isCandidate()) {
-            logger.debug("Ignoring vote request {} with epoch {} since we are already a candidate in this epoch",
-                    request, candidateEpoch);
-            return buildVoteResponse(Errors.NONE, false);
-        } else {
-            FollowerState state = quorum.followerStateOrThrow();
-            final boolean voteGranted;
-            if (state.hasLeader()) {
-                voteGranted = false;
-            } else if (state.hasVoted()) {
-                voteGranted = state.hasVotedFor(candidateId);
-            } else {
-                OffsetAndEpoch lastEpochEndOffsetAndEpoch = new OffsetAndEpoch(
+            OffsetAndEpoch lastEpochEndOffsetAndEpoch = new OffsetAndEpoch(
                     lastEpochEndOffset, lastEpoch);
-                voteGranted = lastEpochEndOffsetAndEpoch.compareTo(endOffset()) >= 0;
-            }
+            voteGranted = lastEpochEndOffsetAndEpoch.compareTo(endOffset()) >= 0;
 
-            if (voteGranted)
-                becomeVotedFollower(candidateId, candidateEpoch);
-            return buildVoteResponse(Errors.NONE, voteGranted);
+            // even if we rejected the vote, we'd still need to bump our epoch,
+            // however, if the old state is leader or candidate, we should restart election right after the bump
+            if (!voteGranted) {
+                becomeUnattachedFollower(candidateEpoch);
+
+                if (isLeaderOrcandidate) {
+                    becomeCandidate();
+                }
+            }
+        } else {
+            if (quorum.isLeader()) {
+                logger.debug("Ignoring vote request {} with epoch {} since we are already leader on that epoch",
+                        request, candidateEpoch);
+                voteGranted = false;
+            } else if (quorum.isCandidate()) {
+                logger.debug("Ignoring vote request {} with epoch {} since we are already candidate on that epoch",
+                        request, candidateEpoch);
+                voteGranted = false;
+            } else {
+                FollowerState state = quorum.followerStateOrThrow();
+
+                if (state.hasLeader()) {
+                    logger.debug("Rejecting vote request {} with epoch {} since we already have a leader {} on that epoch",
+                        request, candidateEpoch, state.leaderId());
+                    voteGranted = false;
+                } else if (state.hasVoted()) {
+                    voteGranted = state.hasVotedFor(candidateId);
+                    if (!voteGranted) {
+                        logger.debug("Rejecting vote request {} with epoch {} since we already have voted for " +
+                            "another candidate {} on that epoch", request, candidateEpoch, state.votedId());
+                    }
+                } else {
+                    OffsetAndEpoch lastEpochEndOffsetAndEpoch = new OffsetAndEpoch(
+                            lastEpochEndOffset, lastEpoch);
+                    voteGranted = lastEpochEndOffsetAndEpoch.compareTo(endOffset()) >= 0;
+                }
+            }
         }
+
+        if (voteGranted) {
+            becomeVotedFollower(candidateId, candidateEpoch);
+        }
+
+        return buildVoteResponse(Errors.NONE, voteGranted);
     }
 
     private boolean handleVoteResponse(
@@ -527,8 +554,9 @@ public class KafkaRaftClient implements RaftClient {
             if (state.isUnattached()
                 || state.hasLeader(requestReplicaId)
                 || state.hasVotedFor(requestReplicaId)) {
-                electionTimer.reset(randomElectionJitterMs());
-                fetchTimer.reset(Long.MAX_VALUE);
+                // set the fetch timeout as election jitter so that they would become candidate
+                // after a pretty short period of time
+                fetchTimer.reset(randomElectionJitterMs());
             }
         } // else if we are already leader or a candidate, then we take no action
 
@@ -1135,11 +1163,12 @@ public class KafkaRaftClient implements RaftClient {
             pollShutdown(gracefulShutdown);
         } else {
             final long timeout = updateTimers(time.milliseconds());
-            electionTimer.update();
-            fetchTimer.update();
 
-            if (quorum.isVoter() && fetchTimer.isExpired()) {
+            if (quorum.isVoter() && !quorum.isLeader() && fetchTimer.isExpired()) {
                 logger.debug("Become candidate due to fetch timeout");
+                becomeCandidate();
+            } else if (quorum.isCandidate() && electionTimer.isExpired()) {
+                logger.debug("Re-elect as candidate due to election timeout");
                 becomeCandidate();
             }
 
