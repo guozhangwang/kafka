@@ -260,8 +260,6 @@ public class RaftEventSimulationTest {
             nonPartitionedNodes.remove(1);
 
             scheduler.runUntil(() -> cluster.allReachedHighWatermark(20, nonPartitionedNodes));
-
-            System.out.println(" >>>>>>>>>>>>>>>> Completed " + seed);
         }
     }
 
@@ -318,8 +316,6 @@ public class RaftEventSimulationTest {
             router.filter(4, new PermitAllTraffic());
 
             scheduler.runUntil(() -> cluster.allReachedHighWatermark(30));
-
-            System.out.println(" >>>>>>>>>>>>>>>> Completed " + seed);
         }
     }
 
