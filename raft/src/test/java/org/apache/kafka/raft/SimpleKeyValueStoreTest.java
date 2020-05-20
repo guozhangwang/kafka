@@ -37,7 +37,7 @@ public class SimpleKeyValueStoreTest {
 
     private KafkaRaftClient setupSingleNodeRaftManager() {
         int localId = 1;
-        int electionTimeoutMs = 10000;
+        int electionTimeoutMs = 1000;
         int electionJitterMs = 50;
         int fetchTimeoutMs = 5000;
         int retryBackoffMs = 100;
