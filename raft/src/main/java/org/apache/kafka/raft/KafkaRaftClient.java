@@ -290,12 +290,13 @@ public class KafkaRaftClient implements RaftClient {
             if (quorum.isVoter()) {
                 timer.reset(electionTimeoutMs + randomElectionJitterMs());
             }
+            // if we are observer, do not reset fetch timer so that we will still find-quorum in time
         }
     }
 
     private void becomeVotedFollower(int candidateId, int epoch) throws IOException {
         if (quorum.becomeVotedFollower(epoch, candidateId)) {
-            timer.reset(electionTimeoutMs);
+            timer.reset(electionTimeoutMs + randomElectionJitterMs());
             resetConnections();
         }
     }
