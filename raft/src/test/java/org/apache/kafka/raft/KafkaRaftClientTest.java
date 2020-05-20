@@ -84,7 +84,7 @@ public class KafkaRaftClientTest {
 
     private final NoOpStateMachine stateMachine = new NoOpStateMachine();
 
-    private QuorumStateStore quorumStateStore = new MockQuorumStateStore();
+    private final QuorumStateStore quorumStateStore = new MockQuorumStateStore();
 
     @After
     public void cleanUp() throws IOException {
@@ -710,7 +710,7 @@ public class KafkaRaftClientTest {
     }
 
     @Test
-    public void testBecomeCandidateAfterFetchTimeout() throws Exception {
+    public void testVoterBecomeCandidateAfterFetchTimeout() throws Exception {
         int otherNodeId = 1;
         int epoch = 5;
         int lastEpoch = 3;
@@ -777,6 +777,64 @@ public class KafkaRaftClientTest {
 
         client.poll();
         assertEquals(ElectionState.withElectedLeader(epoch, leaderId), quorumStateStore.readElectionState());
+    }
+
+    @Test
+    public void testLeaderFindQuorumAfterMajorityFetchTimeout() throws IOException {
+        int epoch = 1;
+        Set<Integer> voters = Utils.mkSet(localId, 1, 2, 3, 4);
+        quorumStateStore.writeElectionState(ElectionState.withElectedLeader(epoch, localId));
+        KafkaRaftClient client = buildClient(voters);
+
+        // Initialize ourselves as the leader
+        assertEquals(ElectionState.withElectedLeader(epoch, localId), quorumStateStore.readElectionState());
+        assertTrue(stateMachine.isLeader());
+
+        // sent one find-quorum request to update connection
+        client.poll();
+        int correlationId = assertSentFindQuorumRequest();
+        channel.mockReceive(new RaftResponse.Inbound(correlationId,
+                findQuorumResponse(OptionalInt.of(localId), epoch, voters), -1));
+
+        // first update the connection, and then sent the begin-quorum requests
+        client.poll();
+        client.poll();
+        assertEquals(4, channel.drainSendQueue().size());
+
+        time.sleep(1L);
+        channel.mockReceive(new RaftRequest.Inbound(channel.newCorrelationId(),
+                fetchQuorumRecordsRequest(epoch, 1, 0L, epoch), time.milliseconds()));
+        client.poll();
+        assertEquals(1, channel.drainSendQueue().size());
+
+        time.sleep(1L);
+        channel.mockReceive(new RaftRequest.Inbound(channel.newCorrelationId(),
+                fetchQuorumRecordsRequest(epoch, 2, 0L, epoch), time.milliseconds()));
+        client.poll();
+        assertEquals(1, channel.drainSendQueue().size());
+
+        time.sleep(1L);
+        channel.mockReceive(new RaftRequest.Inbound(channel.newCorrelationId(),
+                fetchQuorumRecordsRequest(epoch, 3, 0L, epoch), time.milliseconds()));
+        client.poll();
+        assertEquals(1, channel.drainSendQueue().size());
+
+        time.sleep(1L);
+        channel.mockReceive(new RaftRequest.Inbound(channel.newCorrelationId(),
+                fetchQuorumRecordsRequest(epoch, 4, 0L, epoch), time.milliseconds()));
+        client.poll();
+        assertEquals(1, channel.drainSendQueue().size());
+
+        // we have majority of quorum sent fetch, so should not try to find-quorum
+        time.sleep(fetchTimeoutMs - 3);
+
+        client.poll();
+        List<RaftMessage> sent = channel.drainSendQueue();
+        assertEquals(0, sent.size());
+
+        time.sleep(1L);
+        client.poll();
+        assertSentFindQuorumRequest();
     }
 
     @Test
@@ -1678,5 +1736,4 @@ public class KafkaRaftClientTest {
             return channel.hasSentMessages();
         }, 5000, "Condition failed to be satisfied before timeout");
     }
-
 }
