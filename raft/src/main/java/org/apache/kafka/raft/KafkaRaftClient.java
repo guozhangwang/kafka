@@ -193,14 +193,7 @@ public class KafkaRaftClient implements RaftClient {
         maybeUpdateFetchTimerWithRemoteFetchTimestamp(state, state.localId(), time.milliseconds());
     }
 
-    private void maybeUpdateFetchTimerWithRemoteFetchTimestamp(LeaderState state, int replicaId, long timestamp) {
-        final OptionalLong lastFetchTimestamp = state.updateFetchTimestamp(replicaId, timestamp);
-        if (lastFetchTimestamp.isPresent()) {
-            timer.resetDeadline(lastFetchTimestamp.getAsLong() + fetchTimeoutMs);
-        }
-    }
-
-    private void updateReplicaEndOffset(LeaderState state, int replicaId, long endOffset, long timestamp) {
+    private void updateReplicaEndOffset(LeaderState state, int replicaId, long endOffset) {
         if (state.updateEndOffset(replicaId, endOffset)) {
             logger.debug("Leader high watermark updated to {} after replica {} end offset updated to {}",
                     state.highWatermark(), replicaId, endOffset);
@@ -208,6 +201,10 @@ public class KafkaRaftClient implements RaftClient {
         }
 
         // maybe extend the fetch timer with the majority of voter-fetching timestamps
+        maybeUpdateFetchTimerWithRemoteFetchTimestamp(state, replicaId, time.milliseconds());
+    }
+
+    private void maybeUpdateFetchTimerWithRemoteFetchTimestamp(LeaderState state, int replicaId, long timestamp) {
         final OptionalLong lastFetchTimestamp = state.updateFetchTimestamp(replicaId, timestamp);
         if (lastFetchTimestamp.isPresent()) {
             timer.resetDeadline(lastFetchTimestamp.getAsLong() + fetchTimeoutMs);
@@ -291,7 +288,7 @@ public class KafkaRaftClient implements RaftClient {
         if (quorum.becomeUnattachedFollower(epoch)) {
             resetConnections();
             if (quorum.isVoter()) {
-                timer.reset(electionTimeoutMs + randomElectionJitterMs());
+                timer.reset(randomElectionJitterMs());
             }
             // if we are observer, do not reset fetch timer so that we will still find-quorum in time
         }
@@ -365,15 +362,10 @@ public class KafkaRaftClient implements RaftClient {
 
         // we already confirmed that candidateEpoch >= quorum.epoch()
         if (candidateEpoch > quorum.epoch()) {
-            // even if we rejected the vote, we'd still need to bump our epoch,
-            // however, if the old state is leader or candidate, we should restart election right after the bump
             if (!voteGranted) {
-                final boolean isLeaderOrCandidate = quorum.isLeader() || quorum.isCandidate();
+                // even if we rejected the vote, we'd still need to bump our epoch
+                // by transiting to unattached follower and resetting timer
                 becomeUnattachedFollower(candidateEpoch);
-
-                if (isLeaderOrCandidate) {
-                    becomeCandidate();
-                }
             }
         } else if (quorum.isLeader()) {
             logger.debug("Ignoring vote request {} with epoch {} since we are already leader on that epoch",
@@ -627,7 +619,7 @@ public class KafkaRaftClient implements RaftClient {
                 .setNextFetchOffsetEpoch(nextOffsetAndEpoch.epoch);
         } else if (quorum.isVoter(replicaId)) {
             // Voters can read to the end of the log
-            updateReplicaEndOffset(state, replicaId, fetchOffset, time.milliseconds());
+            updateReplicaEndOffset(state, replicaId, fetchOffset);
             state.highWatermark().ifPresent(log::updateHighWatermark);
             Records records = log.read(fetchOffset, OptionalLong.empty());
             return buildFetchQuorumRecordsResponse(Errors.NONE, records, highWatermark);
