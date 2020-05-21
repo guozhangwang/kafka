@@ -780,7 +780,7 @@ public class KafkaRaftClientTest {
     }
 
     @Test
-    public void testLeaderFindQuorumAfterMajorityFetchTimeout() throws IOException {
+    public void testLeaderFindQuorumAfterMajorityFetchTimeout() throws IOException, InterruptedException {
         int epoch = 1;
         Set<Integer> voters = Utils.mkSet(localId, 1, 2, 3, 4);
         quorumStateStore.writeElectionState(ElectionState.withElectedLeader(epoch, localId));
@@ -797,8 +797,7 @@ public class KafkaRaftClientTest {
                 findQuorumResponse(OptionalInt.of(localId), epoch, voters), -1));
 
         // first update the connection, and then sent the begin-quorum requests
-        client.poll();
-        client.poll();
+        pollUntilSend(client);
         assertEquals(4, channel.drainSendQueue().size());
 
         time.sleep(1L);

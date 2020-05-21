@@ -63,6 +63,10 @@ public class LeaderState implements EpochState {
         return voterReplicaStates.keySet().stream().filter(id -> id != localId).collect(Collectors.toSet());
     }
 
+    public int localId() {
+        return localId;
+    }
+
     public Set<Integer> nonEndorsingFollowers() {
         Set<Integer> nonEndorsing = new HashSet<>();
         for (ReplicaState state : voterReplicaStates.values()) {
@@ -92,7 +96,7 @@ public class LeaderState implements EpochState {
         return false;
     }
 
-    private OptionalLong updateLastFetchTimestamp() {
+    private OptionalLong quorumMajorityFetchTimestamp() {
         // Find the latest timestamp which is fetched by a majority of replicas (the leader counts)
         ArrayList<ReplicaState> followersByDescendingFetchTimestamp = new ArrayList<>(this.voterReplicaStates.values());
         followersByDescendingFetchTimestamp.sort(FETCH_TIMESTAMP_COMPARATOR);
@@ -108,7 +112,7 @@ public class LeaderState implements EpochState {
         ReplicaState state = ensureValidVoter(nodeId);
         // To be resilient to system time shifts we do not strictly require the timestamp be monotonically increasing
         state.lastFetchTimestamp = OptionalLong.of(Math.max(state.lastFetchTimestamp.orElse(-1L), timestamp));
-        return updateLastFetchTimestamp();
+        return quorumMajorityFetchTimestamp();
     }
 
     /**
@@ -139,10 +143,6 @@ public class LeaderState implements EpochState {
 
     public boolean updateLocalEndOffset(long endOffset) {
         return updateEndOffset(localId, endOffset);
-    }
-
-    public OptionalLong updateLocalFetchTimestamp(long timestamp) {
-        return updateFetchTimestamp(localId, timestamp);
     }
 
     private static class ReplicaState implements Comparable<ReplicaState> {

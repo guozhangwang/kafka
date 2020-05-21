@@ -122,7 +122,7 @@ public class FollowerState implements EpochState {
 
     public int votedId() {
         if (!votedIdOpt.isPresent()) {
-            throw new IllegalArgumentException("Cannot access leaderId of epoch " + epoch +
+            throw new IllegalArgumentException("Cannot access voted id of epoch " + epoch +
                     " since we do not know it");
         }
         return votedIdOpt.getAsInt();
