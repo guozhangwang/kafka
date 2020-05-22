@@ -190,7 +190,7 @@ public class KafkaRaftClient implements RaftClient {
             applyCommittedRecordsToStateMachine();
         }
 
-        maybeUpdateFetchTimerWithRemoteFetchTimestamp(state, state.localId(), time.milliseconds());
+        maybeUpdateFetchTimerWithRemoteFetchTimestamp(state, state.localId());
     }
 
     private void updateReplicaEndOffset(LeaderState state, int replicaId, long endOffset) {
@@ -201,10 +201,11 @@ public class KafkaRaftClient implements RaftClient {
         }
 
         // maybe extend the fetch timer with the majority of voter-fetching timestamps
-        maybeUpdateFetchTimerWithRemoteFetchTimestamp(state, replicaId, time.milliseconds());
+        maybeUpdateFetchTimerWithRemoteFetchTimestamp(state, replicaId);
     }
 
-    private void maybeUpdateFetchTimerWithRemoteFetchTimestamp(LeaderState state, int replicaId, long timestamp) {
+    private void maybeUpdateFetchTimerWithRemoteFetchTimestamp(LeaderState state, int replicaId) {
+        final long timestamp = time.milliseconds();
         final OptionalLong lastFetchTimestamp = state.updateFetchTimestamp(replicaId, timestamp);
         if (lastFetchTimestamp.isPresent()) {
             timer.resetDeadline(lastFetchTimestamp.getAsLong() + fetchTimeoutMs);
