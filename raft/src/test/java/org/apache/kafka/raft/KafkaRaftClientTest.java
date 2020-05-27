@@ -28,6 +28,7 @@ import org.apache.kafka.common.message.LeaderChangeMessage;
 import org.apache.kafka.common.message.LeaderChangeMessage.Voter;
 import org.apache.kafka.common.message.VoteRequestData;
 import org.apache.kafka.common.message.VoteResponseData;
+import org.apache.kafka.common.metrics.Metrics;
 import org.apache.kafka.common.protocol.ApiKeys;
 import org.apache.kafka.common.protocol.ApiMessage;
 import org.apache.kafka.common.protocol.Errors;
@@ -105,7 +106,7 @@ public class KafkaRaftClientTest {
             .map(this::mockAddress)
             .collect(Collectors.toList());
 
-        KafkaRaftClient client = new KafkaRaftClient(channel, log, quorum, time,
+        KafkaRaftClient client = new KafkaRaftClient(channel, log, quorum, time, new Metrics(time),
             new MockFuturePurgatory<>(time), mockAddress(localId), bootstrapServers,
             electionTimeoutMs, electionJitterMs, fetchTimeoutMs, retryBackoffMs, requestTimeoutMs,
             fetchMaxWaitMs, logContext, random);
@@ -531,6 +532,49 @@ public class KafkaRaftClientTest {
         assertSentVoteResponse(Errors.NONE, leaderEpoch, OptionalInt.of(localId), false);
         assertEquals(ElectionState.withElectedLeader(leaderEpoch, localId),
             quorumStateStore.readElectionState());
+    }
+
+    @Test
+    public void testStateMachineApplyCommittedRecords() throws Exception {
+        int otherNodeId = 1;
+        int epoch = 5;
+
+        Set<Integer> voters = Utils.mkSet(localId, otherNodeId);
+        KafkaRaftClient client = initializeAsLeader(voters, epoch, stateMachine);
+
+        // First poll has no high watermark advance
+        client.poll();
+        assertEquals(OptionalLong.empty(), client.highWatermark());
+
+        // Append some records
+        SimpleRecord[] appendRecords = new SimpleRecord[] {
+                new SimpleRecord("a".getBytes()),
+                new SimpleRecord("b".getBytes()),
+                new SimpleRecord("c".getBytes())
+        };
+        Records records = MemoryRecords.withRecords(0L, CompressionType.NONE, 1, appendRecords);
+        CompletableFuture<OffsetAndEpoch> future = stateMachine.append(records);
+
+        // Let follower send a fetch, note the offset 0 would be a control message for becoming the leader
+        deliverRequest(fetchQuorumRecordsRequest(epoch, otherNodeId, 1L, epoch, 500));
+        pollUntilSend(client);
+        assertTrue(future.isDone());
+        assertEquals(new OffsetAndEpoch(0, epoch), future.get());
+
+        MemoryRecords fetchedRecords = assertSentFetchQuorumRecordsResponse(Errors.NONE, epoch, OptionalInt.of(localId));
+        List<Record> recordList = Utils.toList(fetchedRecords.records());
+        assertEquals(appendRecords.length, recordList.size());
+        assertEquals(OptionalLong.of(1L), client.highWatermark());
+        assertEquals(new OffsetAndEpoch(1, epoch), stateMachine.position());
+
+        // Let the follower to send another fetch from offset 2, which should not get the whole batch to be applied
+        deliverRequest(fetchQuorumRecordsRequest(epoch, otherNodeId, 2L, epoch, 500));
+        client.poll();
+        fetchedRecords = assertSentFetchQuorumRecordsResponse(Errors.NONE, epoch, OptionalInt.of(localId));
+        recordList = Utils.toList(fetchedRecords.records());
+        assertEquals(appendRecords.length - 1, recordList.size());
+        assertEquals(1L, client.highWatermark());
+        assertEquals(new OffsetAndEpoch(1, epoch), stateMachine.position());
     }
 
     @Test

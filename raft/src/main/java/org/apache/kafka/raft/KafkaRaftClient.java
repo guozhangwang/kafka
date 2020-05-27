@@ -49,6 +49,7 @@ import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -56,6 +57,8 @@ import java.util.Optional;
 import java.util.OptionalInt;
 import java.util.OptionalLong;
 import java.util.Random;
+import java.util.SortedMap;
+import java.util.TreeMap;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.CompletableFuture;
@@ -132,8 +135,11 @@ public class KafkaRaftClient implements RaftClient {
     private final ConnectionCache connections;
     private final FuturePurgatory<Void> purgatory;
     private final BlockingQueue<PendingAppendRequest> unsentAppends;
+    private final SortedMap<OffsetAndEpoch, BaseOffsetAndTime> pendingAppends;
 
     private ReplicatedStateMachine stateMachine;
+
+    private long electionStartMs = -1L;
 
     public KafkaRaftClient(NetworkChannel channel,
                            ReplicatedLog log,
@@ -171,6 +177,7 @@ public class KafkaRaftClient implements RaftClient {
         this.connections = new ConnectionCache(channel, bootstrapServers,
             retryBackoffMs, requestTimeoutMs, logContext);
         this.unsentAppends = new ArrayBlockingQueue<>(10);
+        this.pendingAppends = new TreeMap<>();
         this.connections.maybeUpdate(quorum.localId, new HostInfo(advertisedListener, bootTimestamp));
         this.kafkaRaftMetrics = new KafkaRaftMetrics(metrics, "raft", bootTimestamp);
         kafkaRaftMetrics.updateNumVoterConnections(1);
@@ -179,6 +186,7 @@ public class KafkaRaftClient implements RaftClient {
     private void applyCommittedRecordsToStateMachine() {
         quorum.highWatermark().ifPresent(highWatermark -> {
             log.updateHighWatermark(highWatermark);
+            maybeCommitPendingAppends(highWatermark, time.milliseconds());
 
             while (stateMachine.position().offset < highWatermark && shutdown.get() == null) {
                 OffsetAndEpoch position = stateMachine.position();
@@ -188,6 +196,20 @@ public class KafkaRaftClient implements RaftClient {
                     "updated to {}", position, stateMachine.position());
             }
         });
+    }
+
+    private void maybeCommitPendingAppends(long highWatermark, long currentTimeMs) {
+        Iterator<Map.Entry<OffsetAndEpoch, BaseOffsetAndTime>> iter = pendingAppends.entrySet().iterator();
+        while (iter.hasNext()) {
+            Map.Entry<OffsetAndEpoch, BaseOffsetAndTime> entry = iter.next();
+            OffsetAndEpoch offsetAndEpoch = entry.getKey();
+            if (offsetAndEpoch.offset < highWatermark) {
+                BaseOffsetAndTime offsetAndTime = entry.getValue();
+                double elapsedTimePerRecord = (currentTimeMs - offsetAndTime.timeMs) / (double) (offsetAndEpoch.offset - offsetAndTime.baseOffset + 1);
+                kafkaRaftMetrics.updateReplicationLatency(elapsedTimePerRecord, currentTimeMs);
+                iter.remove();
+            }
+        }
     }
 
     private void updateFollowerHighWatermark(FollowerState state, OptionalLong highWatermarkOpt) {
@@ -278,8 +300,9 @@ public class KafkaRaftClient implements RaftClient {
         updateLeaderEndOffsetAndTimestamp(state);
 
         // Add a control message for faster high watermark advance.
+        final long now = time.milliseconds();
         appendControlRecord(MemoryRecords.withLeaderChangeMessage(
-            time.milliseconds(),
+                now,
             quorum.epoch(),
             new LeaderChangeMessage()
                 .setLeaderId(state.election().leaderId())
@@ -294,6 +317,10 @@ public class KafkaRaftClient implements RaftClient {
         timer.reset(fetchTimeoutMs);
         kafkaRaftMetrics.updateLeaderId(state.localId(), state.epoch());
         kafkaRaftMetrics.updateState("leader");
+        if (electionStartMs > 0L) {
+            kafkaRaftMetrics.updateElectionLatency(now - electionStartMs, now);
+            electionStartMs = -1L;
+        }
     }
 
     private void appendControlRecord(Records controlRecord) {
@@ -314,6 +341,7 @@ public class KafkaRaftClient implements RaftClient {
         maybeBecomeLeader(state);
         resetConnections();
 
+        electionStartMs = time.milliseconds();
         timer.reset(electionTimeoutMs + randomElectionJitterMs());
         kafkaRaftMetrics.updateVotedId(state.localId(), state.epoch());
         kafkaRaftMetrics.updateState("candidate");
@@ -361,6 +389,11 @@ public class KafkaRaftClient implements RaftClient {
         kafkaRaftMetrics.updateVotedId(state.leaderId(), state.epoch());
         if (quorum.isVoter()) {
             kafkaRaftMetrics.updateState("voter");
+        }
+        if (electionStartMs > 0L) {
+            long now = time.milliseconds();
+            kafkaRaftMetrics.updateElectionLatency(now - electionStartMs, now);
+            electionStartMs = -1L;
         }
     }
 
@@ -1294,7 +1327,9 @@ public class KafkaRaftClient implements RaftClient {
                 int epoch = quorum.epoch();
                 OptionalLong baseOffsetOpt = maybeAppendAsLeader(leaderState, unsentAppend.records);
                 if (baseOffsetOpt.isPresent()) {
-                    unsentAppend.complete(new OffsetAndEpoch(baseOffsetOpt.getAsLong(), epoch));
+                    OffsetAndEpoch offsetAndEpoch = new OffsetAndEpoch(baseOffsetOpt.getAsLong(), epoch);
+                    unsentAppend.complete(offsetAndEpoch);
+                    pendingAppends.put(offsetAndEpoch, new BaseOffsetAndTime(baseOffsetOpt.getAsLong(), currentTimeMs));
                 } else {
                     unsentAppend.fail(new InvalidRequestException("Leader refused the append"));
                 }
@@ -1418,4 +1453,13 @@ public class KafkaRaftClient implements RaftClient {
         }
     }
 
+    private static class BaseOffsetAndTime {
+        private final long timeMs;
+        private final long baseOffset;
+
+        private BaseOffsetAndTime(long baseOffset, long timeMs) {
+            this.timeMs = timeMs;
+            this.baseOffset = baseOffset;
+        }
+    }
 }
