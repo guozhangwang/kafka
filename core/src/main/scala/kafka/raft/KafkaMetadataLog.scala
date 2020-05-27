@@ -25,7 +25,7 @@ import org.apache.kafka.common.KafkaException
 import org.apache.kafka.common.record.{MemoryRecords, Records}
 import org.apache.kafka.common.utils.Time
 import org.apache.kafka.raft
-import org.apache.kafka.raft.ReplicatedLog
+import org.apache.kafka.raft.{LogAppendInfo, ReplicatedLog}
 
 import scala.compat.java8.OptionConverters._
 
@@ -44,15 +44,18 @@ class KafkaMetadataLog(time: Time, log: Log, maxFetchSizeInBytes: Int = 1024 * 1
     fetchInfo.records
   }
 
-  override def appendAsLeader(records: Records, epoch: Int): lang.Long = {
+  override def appendAsLeader(records: Records, epoch: Int): LogAppendInfo = {
     val appendInfo = log.appendAsLeader(records.asInstanceOf[MemoryRecords], leaderEpoch = epoch)
-    appendInfo.firstOffset.getOrElse {
+    new LogAppendInfo(appendInfo.firstOffset.getOrElse {
       throw new KafkaException("Append failed unexpectedly")
-    }
+    }, appendInfo.lastOffset)
   }
 
-  override def appendAsFollower(records: Records): Unit = {
-    log.appendAsFollower(records.asInstanceOf[MemoryRecords])
+  override def appendAsFollower(records: Records): LogAppendInfo = {
+    val appendInfo = log.appendAsFollower(records.asInstanceOf[MemoryRecords])
+    new LogAppendInfo(appendInfo.firstOffset.getOrElse {
+      throw new KafkaException("Append failed unexpectedly")
+    }, appendInfo.lastOffset)
   }
 
   override def lastFetchedEpoch: Int = {

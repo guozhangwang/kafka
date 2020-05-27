@@ -16,6 +16,8 @@
  */
 package org.apache.kafka.raft;
 
+import org.apache.kafka.common.utils.Timer;
+
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
