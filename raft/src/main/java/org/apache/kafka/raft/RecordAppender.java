@@ -30,7 +30,7 @@ public interface RecordAppender {
      * This method must be thread-safe.
      *
      * @param records The records to append to the log
-     * @return A future containing the base offset and epoch of the appended records (if successful)
+     * @return A future containing the last offset and epoch of the appended records (if successful)
      */
     CompletableFuture<OffsetAndEpoch> append(Records records);
 }

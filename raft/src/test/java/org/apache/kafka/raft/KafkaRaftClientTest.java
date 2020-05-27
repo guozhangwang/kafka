@@ -546,6 +546,12 @@ public class KafkaRaftClientTest {
         client.poll();
         assertEquals(OptionalLong.empty(), client.highWatermark());
 
+        // Let follower send a fetch to initialize the high watermark,
+        // note the offset 0 would be a control message for becoming the leader
+        deliverRequest(fetchQuorumRecordsRequest(epoch, otherNodeId, 0L, epoch, 500));
+        pollUntilSend(client);
+        assertEquals(OptionalLong.of(0L), client.highWatermark());
+
         // Append some records
         SimpleRecord[] appendRecords = new SimpleRecord[] {
                 new SimpleRecord("a".getBytes()),
@@ -555,26 +561,28 @@ public class KafkaRaftClientTest {
         Records records = MemoryRecords.withRecords(0L, CompressionType.NONE, 1, appendRecords);
         CompletableFuture<OffsetAndEpoch> future = stateMachine.append(records);
 
-        // Let follower send a fetch, note the offset 0 would be a control message for becoming the leader
+        client.poll();
+        assertTrue(future.isDone());
+        assertEquals(new OffsetAndEpoch(3, epoch), future.get());
+
+        // Let follower send a fetch, it should advance the high watermark
         deliverRequest(fetchQuorumRecordsRequest(epoch, otherNodeId, 1L, epoch, 500));
         pollUntilSend(client);
-        assertTrue(future.isDone());
-        assertEquals(new OffsetAndEpoch(0, epoch), future.get());
-
-        MemoryRecords fetchedRecords = assertSentFetchQuorumRecordsResponse(Errors.NONE, epoch, OptionalInt.of(localId));
-        List<Record> recordList = Utils.toList(fetchedRecords.records());
-        assertEquals(appendRecords.length, recordList.size());
         assertEquals(OptionalLong.of(1L), client.highWatermark());
         assertEquals(new OffsetAndEpoch(1, epoch), stateMachine.position());
 
-        // Let the follower to send another fetch from offset 2, which should not get the whole batch to be applied
+        // Let the follower to send another fetch from offset 2
         deliverRequest(fetchQuorumRecordsRequest(epoch, otherNodeId, 2L, epoch, 500));
+        pollUntilSend(client);
+        assertEquals(OptionalLong.of(2L), client.highWatermark());
+        assertEquals(new OffsetAndEpoch(2, epoch), stateMachine.position());
+
+        // Let the follower to send another fetch from offset 4, only then the append future can be satisified
+        deliverRequest(fetchQuorumRecordsRequest(epoch, otherNodeId, 4L, epoch, 500));
         client.poll();
-        fetchedRecords = assertSentFetchQuorumRecordsResponse(Errors.NONE, epoch, OptionalInt.of(localId));
-        recordList = Utils.toList(fetchedRecords.records());
-        assertEquals(appendRecords.length - 1, recordList.size());
-        assertEquals(1L, client.highWatermark());
-        assertEquals(new OffsetAndEpoch(1, epoch), stateMachine.position());
+        assertEquals(OptionalLong.of(4L), client.highWatermark());
+        assertEquals(new OffsetAndEpoch(4, epoch), stateMachine.position());
+
     }
 
     @Test

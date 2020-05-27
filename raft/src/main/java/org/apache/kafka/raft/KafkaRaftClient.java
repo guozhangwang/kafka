@@ -831,7 +831,7 @@ public class KafkaRaftClient implements RaftClient {
             kafkaRaftMetrics.updateAppendRecords(info.lastOffset - info.firstOffset + 1);
             kafkaRaftMetrics.updateLogEnd(endOffset.offset, endOffset.epoch);
             logger.trace("Leader appended records at base offset {}, new end offset is {}", info.firstOffset, endOffset);
-            return OptionalLong.of(info.firstOffset);
+            return OptionalLong.of(info.lastOffset);
         }
         return OptionalLong.empty();
     }

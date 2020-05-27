@@ -71,13 +71,13 @@ public class SimpleKeyValueStoreTest {
 
     @Test
     public void testPutAndGet() throws Exception {
-        KafkaRaftClient manager = setupSingleNodeRaftManager();
+        KafkaRaftClient client = setupSingleNodeRaftManager();
         SimpleKeyValueStore<Integer, Integer> store = new SimpleKeyValueStore<>(
             new Serdes.IntegerSerde(), new Serdes.IntegerSerde());
-        manager.initialize(store);
+        client.initialize(store);
 
         CompletableFuture<OffsetAndEpoch> future = store.put(0, 1);
-        manager.poll();
+        client.poll();
 
         assertTrue(future.isDone());
         // The control record takes up one offset.
