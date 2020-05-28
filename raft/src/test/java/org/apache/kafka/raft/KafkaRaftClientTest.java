@@ -28,6 +28,7 @@ import org.apache.kafka.common.message.LeaderChangeMessage;
 import org.apache.kafka.common.message.LeaderChangeMessage.Voter;
 import org.apache.kafka.common.message.VoteRequestData;
 import org.apache.kafka.common.message.VoteResponseData;
+import org.apache.kafka.common.metrics.KafkaMetric;
 import org.apache.kafka.common.metrics.Metrics;
 import org.apache.kafka.common.protocol.ApiKeys;
 import org.apache.kafka.common.protocol.ApiMessage;
@@ -67,6 +68,7 @@ import java.util.stream.Collectors;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertThrows;
 import static org.junit.Assert.assertTrue;
 
@@ -99,6 +101,10 @@ public class KafkaRaftClientTest {
     }
 
     private KafkaRaftClient buildClient(Set<Integer> voters, ReplicatedStateMachine stateMachine) throws IOException {
+        return buildClient(voters, stateMachine, new Metrics(time));
+    }
+
+    private KafkaRaftClient buildClient(Set<Integer> voters, ReplicatedStateMachine stateMachine, Metrics metrics) throws IOException {
         LogContext logContext = new LogContext();
         QuorumState quorum = new QuorumState(localId, voters, quorumStateStore, logContext);
 
@@ -106,7 +112,7 @@ public class KafkaRaftClientTest {
             .map(this::mockAddress)
             .collect(Collectors.toList());
 
-        KafkaRaftClient client = new KafkaRaftClient(channel, log, quorum, time, new Metrics(time),
+        KafkaRaftClient client = new KafkaRaftClient(channel, log, quorum, time, metrics,
             new MockFuturePurgatory<>(time), mockAddress(localId), bootstrapServers,
             electionTimeoutMs, electionJitterMs, fetchTimeoutMs, retryBackoffMs, requestTimeoutMs,
             fetchMaxWaitMs, logContext, random);
@@ -1523,6 +1529,62 @@ public class KafkaRaftClientTest {
         // Now we should be fetching
         client.poll();
         assertSentFetchQuorumRecordsRequest(epoch, 2L, lastEpoch);
+    }
+
+    @Test
+    public void testMetrics() throws Exception {
+        Metrics metrics = new Metrics(time);
+        int epoch = 1;
+        quorumStateStore.writeElectionState(ElectionState.withElectedLeader(epoch, localId));
+        KafkaRaftClient client = buildClient(Collections.singleton(localId), stateMachine, metrics);
+
+        assertNotNull(getMetric(metrics, "current-state"));
+        assertNotNull(getMetric(metrics, "current-leader"));
+        assertNotNull(getMetric(metrics, "current-vote"));
+        assertNotNull(getMetric(metrics, "current-epoch"));
+        assertNotNull(getMetric(metrics, "high-watermark"));
+        assertNotNull(getMetric(metrics, "log-end-offset"));
+        assertNotNull(getMetric(metrics, "log-end-epoch"));
+        assertNotNull(getMetric(metrics, "boot-timestamp"));
+        assertNotNull(getMetric(metrics, "voter-connections-size"));
+        assertNotNull(getMetric(metrics, "poll-idle-ratio-avg"));
+        assertNotNull(getMetric(metrics, "replication-latency-avg"));
+        assertNotNull(getMetric(metrics, "replication-latency-max"));
+        assertNotNull(getMetric(metrics, "election-latency-avg"));
+        assertNotNull(getMetric(metrics, "election-latency-max"));
+        assertNotNull(getMetric(metrics, "fetch-records-rate"));
+        assertNotNull(getMetric(metrics, "append-records-rate"));
+
+        assertEquals("leader", getMetric(metrics, "current-state").metricValue());
+        assertEquals((double) localId, getMetric(metrics, "current-leader").metricValue());
+        assertEquals((double) -1, getMetric(metrics, "current-vote").metricValue());
+        assertEquals((double) epoch, getMetric(metrics, "current-epoch").metricValue());
+        assertEquals((double) 0L, getMetric(metrics, "high-watermark").metricValue());
+        assertEquals((double) 1L, getMetric(metrics, "log-end-offset").metricValue());
+        assertEquals((double) epoch, getMetric(metrics, "log-end-epoch").metricValue());
+        assertEquals((double) time.milliseconds(), getMetric(metrics, "boot-timestamp").metricValue());
+
+        SimpleRecord[] appendRecords = new SimpleRecord[] {
+                new SimpleRecord("a".getBytes()),
+                new SimpleRecord("b".getBytes()),
+                new SimpleRecord("c".getBytes())
+        };
+        Records records = MemoryRecords.withRecords(0L, CompressionType.NONE, 1, appendRecords);
+        stateMachine.append(records);
+        client.poll();
+
+        assertEquals((double) 4L, getMetric(metrics, "high-watermark").metricValue());
+        assertEquals((double) 4L, getMetric(metrics, "log-end-offset").metricValue());
+        assertEquals((double) epoch, getMetric(metrics, "log-end-epoch").metricValue());
+
+        client.shutdown(100);
+
+        // should only have total-metrics-count left
+        assertEquals(1, metrics.metrics().size());
+    }
+
+    private KafkaMetric getMetric(final Metrics metrics, final String name) {
+        return metrics.metrics().get(metrics.metricName(name, "raft-metrics"));
     }
 
     private void verifyLeaderChangeMessage(int leaderId,

@@ -327,6 +327,9 @@ public class KafkaRaftClient implements RaftClient {
         if (shutdown.get() != null)
             throw new IllegalStateException("Cannot append records while we are shutting down");
         log.appendAsLeader(controlRecord, quorum.epoch());
+        OffsetAndEpoch endOffset = endOffset();
+        kafkaRaftMetrics.updateAppendRecords(1);
+        kafkaRaftMetrics.updateLogEnd(endOffset.offset, endOffset.epoch);
     }
 
     private void maybeBecomeLeader(CandidateState state) throws IOException {
@@ -1380,6 +1383,7 @@ public class KafkaRaftClient implements RaftClient {
     @Override
     public void shutdown(int timeoutMs) {
         // TODO: Safe to access epoch? Need to reset connections to be able to send EndQuorumEpoch? Block until shutdown completes?
+        kafkaRaftMetrics.close();
         shutdown.set(new GracefulShutdown(timeoutMs, quorum.epoch()));
         channel.wakeup();
     }
