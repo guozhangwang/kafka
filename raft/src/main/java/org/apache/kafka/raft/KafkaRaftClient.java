@@ -134,15 +134,11 @@ public class KafkaRaftClient implements RaftClient {
     private final Random random;
     private final ConnectionCache connections;
     private final FuturePurgatory<Void> purgatory;
-    private final BlockingQueue<PendingAppendRequest> unsentAppends;
+    private final BlockingQueue<PendingAppend> unsentAppends;
     private final SortedMap<OffsetAndEpoch, BaseOffsetAndTime> pendingAppends;
 
     private ReplicatedStateMachine stateMachine;
-
     private long electionStartMs = -1L;
-    private final BlockingQueue<PendingAppend> unsentAppends;
-
-    private ReplicatedStateMachine stateMachine;
 
     public KafkaRaftClient(RaftConfig raftConfig,
                            NetworkChannel channel,
@@ -156,6 +152,7 @@ public class KafkaRaftClient implements RaftClient {
             log,
             quorum,
             time,
+            new Metrics(time),
             purgatory,
             advertisedListener,
             raftConfig.bootstrapServers(),

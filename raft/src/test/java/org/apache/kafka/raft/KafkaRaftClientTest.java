@@ -747,7 +747,7 @@ public class KafkaRaftClientTest {
         int epoch = 1;
         Set<Integer> voters = Utils.mkSet(localId, 1, 2, 3, 4);
         quorumStateStore.writeElectionState(ElectionState.withElectedLeader(epoch, localId, voters));
-        KafkaRaftClient client = initializeAsLeader(voters, epoch);
+        KafkaRaftClient client = initializeAsLeader(voters, epoch, stateMachine);
         assertNoSentMessages();
 
         time.sleep(1L);
@@ -804,7 +804,7 @@ public class KafkaRaftClientTest {
         int otherNodeId = 1;
         int epoch = 5;
         Set<Integer> voters = Utils.mkSet(localId, otherNodeId);
-        KafkaRaftClient client = initializeAsLeader(voters, epoch);
+        KafkaRaftClient client = initializeAsLeader(voters, epoch, stateMachine);
 
         deliverRequest(fetchQuorumRecordsRequest(
             epoch, otherNodeId, -5L, 0, 0));
@@ -837,7 +837,7 @@ public class KafkaRaftClientTest {
         int otherNodeId = 1;
         int epoch = 5;
         Set<Integer> voters = Utils.mkSet(localId, otherNodeId);
-        KafkaRaftClient client = initializeAsLeader(voters, epoch);
+        KafkaRaftClient client = initializeAsLeader(voters, epoch, stateMachine);
 
         int nonVoterId = 2;
         deliverRequest(voteRequest(epoch, nonVoterId, 0, 0));
@@ -887,7 +887,7 @@ public class KafkaRaftClientTest {
         int epoch = 5;
 
         Set<Integer> voters = Utils.mkSet(localId, otherNodeId);
-        KafkaRaftClient client = initializeAsLeader(voters, epoch);
+        KafkaRaftClient client = initializeAsLeader(voters, epoch, stateMachine);
 
         // Follower sends a fetch which cannot be satisfied immediately
         int maxWaitTimeMs = 500;
@@ -908,7 +908,7 @@ public class KafkaRaftClientTest {
         int epoch = 5;
 
         Set<Integer> voters = Utils.mkSet(localId, otherNodeId);
-        KafkaRaftClient client = initializeAsLeader(voters, epoch);
+        KafkaRaftClient client = initializeAsLeader(voters, epoch, stateMachine);
 
         // Follower sends a fetch which cannot be satisfied immediately
         deliverRequest(fetchQuorumRecordsRequest(epoch, otherNodeId, 1L, epoch, 500));
@@ -942,7 +942,7 @@ public class KafkaRaftClientTest {
         int epoch = 5;
 
         Set<Integer> voters = Utils.mkSet(voter1, voter2, voter3);
-        KafkaRaftClient client = initializeAsLeader(voters, epoch);
+        KafkaRaftClient client = initializeAsLeader(voters, epoch, stateMachine);
 
         // Follower sends a fetch which cannot be satisfied immediately
         deliverRequest(fetchQuorumRecordsRequest(epoch, voter2, 1L, epoch, 500));
@@ -976,10 +976,10 @@ public class KafkaRaftClientTest {
             findQuorumResponse(leaderId, epoch, voters));
     }
 
-    private KafkaRaftClient initializeAsLeader(Set<Integer> voters, int epoch) throws Exception {
+    private KafkaRaftClient initializeAsLeader(Set<Integer> voters, int epoch, MockStateMachine stateMachine) throws Exception {
         ElectionState leaderElectionState = ElectionState.withElectedLeader(epoch, localId, voters);
         quorumStateStore.writeElectionState(leaderElectionState);
-        KafkaRaftClient client = buildClient(voters);
+        KafkaRaftClient client = buildClient(voters, stateMachine);
         assertEquals(leaderElectionState, quorumStateStore.readElectionState());
 
         initializeVoterConnections(client, voters, epoch, OptionalInt.of(localId));
@@ -1449,7 +1449,7 @@ public class KafkaRaftClientTest {
     public void testMetrics() throws Exception {
         Metrics metrics = new Metrics(time);
         int epoch = 1;
-        quorumStateStore.writeElectionState(ElectionState.withElectedLeader(epoch, localId));
+        quorumStateStore.writeElectionState(ElectionState.withElectedLeader(epoch, localId, Collections.singleton(localId)));
         KafkaRaftClient client = buildClient(Collections.singleton(localId), stateMachine, metrics);
 
         assertNotNull(getMetric(metrics, "current-state"));
