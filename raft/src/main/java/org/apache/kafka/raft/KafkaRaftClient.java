@@ -140,6 +140,34 @@ public class KafkaRaftClient implements RaftClient {
     private ReplicatedStateMachine stateMachine;
 
     private long electionStartMs = -1L;
+    private final BlockingQueue<PendingAppend> unsentAppends;
+
+    private ReplicatedStateMachine stateMachine;
+
+    public KafkaRaftClient(RaftConfig raftConfig,
+                           NetworkChannel channel,
+                           ReplicatedLog log,
+                           QuorumState quorum,
+                           Time time,
+                           FuturePurgatory<Void> purgatory,
+                           InetSocketAddress advertisedListener,
+                           LogContext logContext) {
+        this(channel,
+            log,
+            quorum,
+            time,
+            purgatory,
+            advertisedListener,
+            raftConfig.bootstrapServers(),
+            raftConfig.electionTimeoutMs(),
+            raftConfig.electionJitterMaxMs(),
+            raftConfig.fetchTimeoutMs(),
+            raftConfig.retryBackoffMs(),
+            raftConfig.requestTimeoutMs(),
+            500,
+            logContext,
+            new Random());
+    }
 
     public KafkaRaftClient(NetworkChannel channel,
                            ReplicatedLog log,
@@ -188,9 +216,13 @@ public class KafkaRaftClient implements RaftClient {
             log.updateHighWatermark(highWatermark);
             maybeCommitPendingAppends(highWatermark, time.milliseconds());
 
+            logger.debug("Applying committed entries up to high watermark {}. " +
+                "Current position is {}", highWatermark, stateMachine.position());
+
             while (stateMachine.position().offset < highWatermark && shutdown.get() == null) {
                 OffsetAndEpoch position = stateMachine.position();
                 Records records = readCommitted(position, highWatermark);
+
                 stateMachine.apply(records);
                 logger.trace("Applied committed records at {} to the state machine; position " +
                     "updated to {}", position, stateMachine.position());
@@ -302,7 +334,7 @@ public class KafkaRaftClient implements RaftClient {
         // Add a control message for faster high watermark advance.
         final long now = time.milliseconds();
         appendControlRecord(MemoryRecords.withLeaderChangeMessage(
-                now,
+            now,
             quorum.epoch(),
             new LeaderChangeMessage()
                 .setLeaderId(state.election().leaderId())
@@ -487,6 +519,7 @@ public class KafkaRaftClient implements RaftClient {
             becomeVotedFollower(candidateId, candidateEpoch);
         }
 
+        logger.info("Vote request {} is {}", request, voteGranted ? "granted" : "rejected");
         return buildVoteResponse(Errors.NONE, voteGranted);
     }
 
@@ -871,8 +904,8 @@ public class KafkaRaftClient implements RaftClient {
             voter.setVoterId(voterEntry.getKey());
             voterEntry.getValue().ifPresent(voterHostInfo -> {
                 voter.setHost(voterHostInfo.address.getHostString())
-                        .setPort(voterHostInfo.address.getPort())
-                        .setBootTimestamp(voterHostInfo.bootTimestamp);
+                    .setPort(voterHostInfo.address.getPort())
+                    .setBootTimestamp(voterHostInfo.bootTimestamp);
             });
             voters.add(voter);
         }
@@ -1039,7 +1072,7 @@ public class KafkaRaftClient implements RaftClient {
 
         ConnectionState connection = connections.getOrCreate(response.sourceId());
         if (handledSuccessfully) {
-            connection.onResponseReceived(response.correlationId);
+            connection.onResponseReceived(response.correlationId, currentTimeMs);
         } else {
             connection.onResponseError(response.correlationId, currentTimeMs);
         }
@@ -1306,7 +1339,7 @@ public class KafkaRaftClient implements RaftClient {
             }
 
             maybeSendRequests(timer.currentTimeMs());
-            maybeSendOrHandleAppendRequest(timer.currentTimeMs());
+            handlePendingAppends(timer.currentTimeMs());
 
             // TODO: Receive time needs to take into account backing off operations that still need doing
             List<RaftMessage> inboundMessages = channel.receive(timer.remainingMs());
@@ -1317,8 +1350,8 @@ public class KafkaRaftClient implements RaftClient {
         }
     }
 
-    private void maybeSendOrHandleAppendRequest(long currentTimeMs) {
-        PendingAppendRequest unsentAppend = unsentAppends.poll();
+    private void handlePendingAppends(long currentTimeMs) {
+        PendingAppend unsentAppend = unsentAppends.poll();
         if (unsentAppend == null || unsentAppend.isCancelled())
             return;
 
@@ -1355,13 +1388,14 @@ public class KafkaRaftClient implements RaftClient {
             throw new IllegalStateException("Cannot append records while we are shutting down");
 
         CompletableFuture<OffsetAndEpoch> future = new CompletableFuture<>();
-        PendingAppendRequest pendingAppendRequest = new PendingAppendRequest(
+        PendingAppend pendingAppend = new PendingAppend(
             records, future, time.milliseconds(), requestTimeoutMs);
 
-        if (!unsentAppends.offer(pendingAppendRequest)) {
+        if (!unsentAppends.offer(pendingAppend)) {
             future.completeExceptionally(new KafkaException("Failed to append records since the unsent " +
                 "append queue is full"));
         }
+        channel.wakeup();
         return future;
     }
 
@@ -1424,16 +1458,16 @@ public class KafkaRaftClient implements RaftClient {
 
     }
 
-    private static class PendingAppendRequest {
+    private static class PendingAppend {
         private final Records records;
         private final CompletableFuture<OffsetAndEpoch> future;
         private final long createTimeMs;
         private final long requestTimeoutMs;
 
-        private PendingAppendRequest(Records records,
-                                     CompletableFuture<OffsetAndEpoch> future,
-                                     long createTimeMs,
-                                     long requestTimeoutMs) {
+        private PendingAppend(Records records,
+                              CompletableFuture<OffsetAndEpoch> future,
+                              long createTimeMs,
+                              long requestTimeoutMs) {
             this.records = records;
             this.future = future;
             this.createTimeMs = createTimeMs;

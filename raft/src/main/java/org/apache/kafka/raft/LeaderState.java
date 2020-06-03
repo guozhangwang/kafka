@@ -16,8 +16,6 @@
  */
 package org.apache.kafka.raft;
 
-import org.apache.kafka.common.utils.Timer;
-
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
@@ -53,7 +51,7 @@ public class LeaderState implements EpochState {
 
     @Override
     public ElectionState election() {
-        return ElectionState.withElectedLeader(epoch, localId);
+        return ElectionState.withElectedLeader(epoch, localId, voterReplicaStates.keySet());
     }
 
     @Override

@@ -38,15 +38,18 @@ public class ReplicatedCounter implements ReplicatedStateMachine {
     private final Logger log;
     private final int nodeId;
     private final AtomicInteger committed = new AtomicInteger(0);
+    private final boolean verbose;
     private OffsetAndEpoch position = new OffsetAndEpoch(0, 0);
     private AtomicInteger uncommitted;
 
     private RecordAppender appender = null;
 
     public ReplicatedCounter(int nodeId,
-                             LogContext logContext) {
+                             LogContext logContext,
+                             boolean verbose) {
         this.nodeId = nodeId;
         this.log = logContext.logger(ReplicatedCounter.class);
+        this.verbose = verbose;
     }
 
     @Override
@@ -82,6 +85,10 @@ public class ReplicatedCounter implements ReplicatedStateMachine {
                     }
                     log.trace("Applied counter update at offset {}: {} -> {}", record.offset(), committed.get(), value);
                     committed.set(value);
+
+                    if (verbose) {
+                        System.out.println(Integer.toString(value));
+                    }
                 }
             }
             this.position = new OffsetAndEpoch(batch.lastOffset() + 1, batch.partitionLeaderEpoch());

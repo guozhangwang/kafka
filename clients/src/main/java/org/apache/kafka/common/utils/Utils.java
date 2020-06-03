@@ -343,6 +343,18 @@ public final class Utils {
     }
 
     /**
+     * Cast {@code klass} to {@code base} and instantiate it.
+     * @param klass The class to instantiate
+     * @param base A know baseclass of klass.
+     * @param <T> the type of the base class
+     * @throws ClassCastException If {@code klass} is not a subclass of {@code base}.
+     * @return the new instance.
+     */
+    public static <T> T newInstance(Class<?> klass, Class<T> base) {
+        return Utils.newInstance(klass.asSubclass(base));
+    }
+
+    /**
      * Construct a new object using a class name and parameters.
      *
      * @param className                 The full name of the class to construct.
@@ -755,6 +767,20 @@ public final class Utils {
     }
 
     /**
+     * Creates a {@link Properties} from a map
+     *
+     * @param properties A map of properties to add
+     * @return The properties object
+     */
+    public static Properties mkObjectProperties(final Map<String, Object> properties) {
+        final Properties result = new Properties();
+        for (final Map.Entry<String, Object> entry : properties.entrySet()) {
+            result.put(entry.getKey(), entry.getValue());
+        }
+        return result;
+    }
+
+    /**
      * Recursively delete the given file/directory and any subfiles (if any exist)
      *
      * @param rootFile The root file at which to begin deleting
@@ -883,6 +909,18 @@ public final class Utils {
         }
         if (exception != null)
             throw exception;
+    }
+
+    /**
+     * An {@link AutoCloseable} interface without a throws clause in the signature
+     *
+     * This is used with lambda expressions in try-with-resources clauses
+     * to avoid casting un-checked exceptions to checked exceptions unnecessarily.
+     */
+    @FunctionalInterface
+    public interface UncheckedCloseable extends AutoCloseable {
+        @Override
+        void close();
     }
 
     /**
@@ -1157,6 +1195,23 @@ public final class Utils {
         for (final Set<E> s : set) {
             result.addAll(s);
         }
+        return result;
+    }
+
+    @SafeVarargs
+    public static <E> Set<E> intersection(final Supplier<Set<E>> constructor, final Set<E> first, final Set<E>... set) {
+        final Set<E> result = constructor.get();
+        result.addAll(first);
+        for (final Set<E> s : set) {
+            result.retainAll(s);
+        }
+        return result;
+    }
+
+    public static <E> Set<E> diff(final Supplier<Set<E>> constructor, final Set<E> left, final Set<E> right) {
+        final Set<E> result = constructor.get();
+        result.addAll(left);
+        result.removeAll(right);
         return result;
     }
 }
