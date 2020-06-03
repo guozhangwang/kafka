@@ -135,7 +135,7 @@ public class KafkaRaftClientTest {
         int epoch = 2;
 
         quorumStateStore.writeElectionState(ElectionState.withElectedLeader(epoch, localId, voters));
-        KafkaRaftClient client = buildClient(voters);
+        KafkaRaftClient client = buildClient(voters, stateMachine);
         assertTrue(stateMachine.isLeader());
         assertEquals(epoch, stateMachine.epoch());
         assertEquals(1L, log.endOffset());
@@ -1243,7 +1243,7 @@ public class KafkaRaftClientTest {
         int epoch = 5;
         Set<Integer> voters = Utils.mkSet(localId, otherNodeId);
         quorumStateStore.writeElectionState(ElectionState.withElectedLeader(epoch, otherNodeId, voters));
-        KafkaRaftClient client = buildClient(voters);
+        KafkaRaftClient client = buildClient(voters, stateMachine);
         assertEquals(ElectionState.withElectedLeader(epoch, otherNodeId, voters), quorumStateStore.readElectionState());
         assertTrue(stateMachine.isFollower());
         assertEquals(epoch, stateMachine.epoch());
@@ -1277,7 +1277,7 @@ public class KafkaRaftClientTest {
         int epoch = 5;
         Set<Integer> voters = Utils.mkSet(localId, otherNodeId);
         quorumStateStore.writeElectionState(ElectionState.withElectedLeader(epoch, otherNodeId, voters));
-        KafkaRaftClient client = buildClient(voters);
+        KafkaRaftClient client = buildClient(voters, stateMachine);
         assertEquals(ElectionState.withElectedLeader(epoch, otherNodeId, voters), quorumStateStore.readElectionState());
         assertTrue(stateMachine.isFollower());
         assertEquals(epoch, stateMachine.epoch());
@@ -1304,7 +1304,7 @@ public class KafkaRaftClientTest {
         Set<Integer> voters = Utils.mkSet(localId, otherNodeId);
         quorumStateStore.writeElectionState(ElectionState.withElectedLeader(epoch, otherNodeId, voters));
 
-        buildClient(voters);
+        buildClient(voters, stateMachine);
         assertEquals(ElectionState.withElectedLeader(epoch, otherNodeId, voters), quorumStateStore.readElectionState());
         assertTrue(stateMachine.isFollower());
         assertEquals(epoch, stateMachine.epoch());
