@@ -23,7 +23,7 @@ import org.apache.kafka.common.metrics.Sensor;
 import org.apache.kafka.common.metrics.stats.Avg;
 import org.apache.kafka.common.metrics.stats.Max;
 import org.apache.kafka.common.metrics.stats.Rate;
-import org.apache.kafka.common.metrics.stats.WindowedCount;
+import org.apache.kafka.common.metrics.stats.WindowedSum;
 import org.apache.kafka.raft.FollowerState;
 import org.apache.kafka.raft.QuorumState;
 
@@ -136,12 +136,12 @@ public class KafkaRaftMetrics implements AutoCloseable {
         this.fetchRecordsSensor = metrics.sensor("fetch-records");
         this.fetchRecordsSensor.add(metrics.metricName("fetch-records-rate", metricGroupName,
                 "The average number of records fetched from the leader of the raft quorum."),
-                new Rate(TimeUnit.SECONDS, new WindowedCount()));
+                new Rate(TimeUnit.SECONDS, new WindowedSum()));
 
         this.appendRecordsSensor = metrics.sensor("append-records");
         this.appendRecordsSensor.add(metrics.metricName("append-records-rate", metricGroupName,
                 "The average number of records appended per sec as the leader of the raft quorum."),
-                new Rate(TimeUnit.SECONDS, new WindowedCount()));
+                new Rate(TimeUnit.SECONDS, new WindowedSum()));
     }
 
     public void updatePollStart(long now) {
@@ -157,7 +157,6 @@ public class KafkaRaftMetrics implements AutoCloseable {
     public void updatePollEnd(long now) {
         this.pollEndMs = now;
     }
-
 
     public void updateLogEnd(long offset, int epoch) {
         logEndOffset = offset;
