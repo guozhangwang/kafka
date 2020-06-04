@@ -1,3 +1,19 @@
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements. See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License. You may obtain a copy of the License at
+ *
+ *    http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
 package org.apache.kafka.raft.internals;
 
 import org.apache.kafka.common.MetricName;
@@ -8,25 +24,21 @@ import org.apache.kafka.common.metrics.stats.Avg;
 import org.apache.kafka.common.metrics.stats.Max;
 import org.apache.kafka.common.metrics.stats.Rate;
 import org.apache.kafka.common.metrics.stats.WindowedCount;
+import org.apache.kafka.raft.FollowerState;
+import org.apache.kafka.raft.QuorumState;
 
 import java.util.concurrent.TimeUnit;
 
 public class KafkaRaftMetrics implements AutoCloseable {
 
     private final Metrics metrics;
+    private final long bootTimestamp;
 
-    private String state;
-    private int currentLeaderId;    // -1 indicate unknown
-    private int currentVotedId;     // -1 indicate not voted for anyone
-    private int currentEpoch;
-    private long highWatermark;
     private long logEndOffset;
     private int logEndEpoch;
     private int numVoterConnections;
-    private final long bootTimestamp;
-
-    private long lastHighWatermarkUpdateMs = -1L;
-    private long lastElectionStartMs = -1L;
+    private long pollStartMs;
+    private long pollEndMs;
 
     private final MetricName currentLeaderIdMetricName;
     private final MetricName currentVotedIdMetricName;
@@ -43,35 +55,53 @@ public class KafkaRaftMetrics implements AutoCloseable {
     private final Sensor appendRecordsSensor;
     private final Sensor pollIdleSensor;
 
-    public KafkaRaftMetrics(Metrics metrics, String metricGrpPrefix, long timestamp) {
+    public KafkaRaftMetrics(Metrics metrics, String metricGrpPrefix, QuorumState state, long timestamp) {
         this.metrics = metrics;
         this.bootTimestamp = timestamp;
         String metricGroupName = metricGrpPrefix + "-metrics";
 
-        this.currentVotedId = -1;
-        this.currentLeaderId = -1;
-        this.currentEpoch = 0;
-        this.highWatermark = 0L;
-        this.state = "observer";
+        this.pollStartMs = 0L;
+        this.pollEndMs = 0L;
         this.logEndOffset = 0L;
         this.logEndEpoch = 0;
         this.numVoterConnections = 0;
 
         this.currentStateMetricName = metrics.metricName("current-state", metricGroupName, "The current state of this member; possible values are leader, candidate, voter, observer");
-        Gauge<String> stateProvider = (mConfig, now) -> state;
+        Gauge<String> stateProvider = (mConfig, now) -> {
+            if (state.isLeader()) {
+                return "leader";
+            } else if (state.isCandidate()) {
+                return "candidate";
+            } else {
+                if (state.isVoter())
+                    return "voter";
+                else
+                    return "observer";
+            }
+        };
         metrics.addMetric(this.currentStateMetricName, null, stateProvider);
 
         this.currentLeaderIdMetricName = metrics.metricName("current-leader", metricGroupName, "The current quorum leader's id; -1 indicates unknown");
-        metrics.addMetric(this.currentLeaderIdMetricName, (mConfig, now) -> currentLeaderId);
+        metrics.addMetric(this.currentLeaderIdMetricName, (mConfig, now) -> state.leaderId().orElse(-1));
 
         this.currentVotedIdMetricName = metrics.metricName("current-vote", metricGroupName, "The current voted leader's id; -1 indicates not voted for anyone");
-        metrics.addMetric(this.currentVotedIdMetricName, (mConfig, now) -> currentVotedId);
+        metrics.addMetric(this.currentVotedIdMetricName, (mConfig, now) -> {
+            if (state.isLeader() || state.isCandidate()) {
+                return state.localId;
+            } else {
+                FollowerState followerState = state.followerStateOrThrow();
+                if (followerState.hasVoted())
+                    return followerState.votedId();
+                else
+                    return -1;
+            }
+        });
 
         this.currentEpochMetricName = metrics.metricName("current-epoch", metricGroupName, "The current quorum epoch.");
-        metrics.addMetric(this.currentEpochMetricName, (mConfig, now) -> currentEpoch);
+        metrics.addMetric(this.currentEpochMetricName, (mConfig, now) -> state.epoch());
 
-        this.highWatermarkMetricName = metrics.metricName("high-watermark", metricGroupName, "The high watermark maintained on this member.");
-        metrics.addMetric(this.highWatermarkMetricName, (mConfig, now) -> highWatermark);
+        this.highWatermarkMetricName = metrics.metricName("high-watermark", metricGroupName, "The high watermark maintained on this member; -1 if it is unknown");
+        metrics.addMetric(this.highWatermarkMetricName, (mConfig, now) -> state.highWatermark().orElse(-1L));
 
         this.logEndOffsetMetricName = metrics.metricName("log-end-offset", metricGroupName, "The current raft log end offset.");
         metrics.addMetric(this.logEndOffsetMetricName, (mConfig, now) -> logEndOffset);
@@ -82,7 +112,7 @@ public class KafkaRaftMetrics implements AutoCloseable {
         this.bootTimestampMetricName = metrics.metricName("boot-timestamp", metricGroupName, "The bootstrapped timestamp of this member.");
         metrics.addMetric(this.bootTimestampMetricName, (mConfig, now) -> bootTimestamp);
 
-        this.numVoterConnectionsMetricName = metrics.metricName("voter-connections-size", metricGroupName, "The number of voter connections recognized at this member.");
+        this.numVoterConnectionsMetricName = metrics.metricName("number-voter-connections", metricGroupName, "The number of voter connections recognized at this member.");
         metrics.addMetric(this.numVoterConnectionsMetricName, (mConfig, now) -> numVoterConnections);
 
         this.pollIdleSensor = metrics.sensor("poll-idle-ratio");
@@ -114,38 +144,20 @@ public class KafkaRaftMetrics implements AutoCloseable {
                 new Rate(TimeUnit.SECONDS, new WindowedCount()));
     }
 
-    public void updateLeaderId(int leaderId, int epoch) {
-        currentLeaderId = leaderId;
-        updateEpoch(epoch);
-    }
-
-    public void updateVotedId(int votedId, int epoch) {
-        currentVotedId = votedId;
-        currentLeaderId = -1;
-        updateEpoch(epoch);
-    }
-
-    public void updateEpoch(int epoch) {
-        currentEpoch = epoch;
-    }
-
-    public void updateFollowerHighWatermark(long highWatermark) {
-        this.highWatermark = highWatermark;
-    }
-
-    public void updateLeaderHighWatermark(long highWatermark, long now) {
-        long oldHighWatermark = this.highWatermark;
-        this.highWatermark = highWatermark;
-
-        if (lastHighWatermarkUpdateMs == -1) {
-            replicationTimeSensor.record(this.highWatermark - oldHighWatermark);
+    public void updatePollStart(long now) {
+        if (pollEndMs != 0L) {
+            long pollTimeMs = Math.max(pollEndMs - pollStartMs, 0L);
+            long totalTimeMs = Math.max(now - pollStartMs, 1L);
+            this.pollIdleSensor.record(pollTimeMs * 1.0 / totalTimeMs, now);
         }
-        lastHighWatermarkUpdateMs = now;
+
+        this.pollStartMs = now;
     }
 
-    public void updateState(String state) {
-        this.state = state;
+    public void updatePollEnd(long now) {
+        this.pollEndMs = now;
     }
+
 
     public void updateLogEnd(long offset, int epoch) {
         logEndOffset = offset;
@@ -169,7 +181,7 @@ public class KafkaRaftMetrics implements AutoCloseable {
     }
 
     public void updateElectionLatency(double latencyMs, long now) {
-        replicationTimeSensor.record(latencyMs, now);
+        electionTimeSensor.record(latencyMs, now);
     }
 
     @Override

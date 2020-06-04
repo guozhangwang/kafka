@@ -546,9 +546,9 @@ public class KafkaRaftClientTest {
 
         // Append some records
         SimpleRecord[] appendRecords = new SimpleRecord[] {
-                new SimpleRecord("a".getBytes()),
-                new SimpleRecord("b".getBytes()),
-                new SimpleRecord("c".getBytes())
+            new SimpleRecord("a".getBytes()),
+            new SimpleRecord("b".getBytes()),
+            new SimpleRecord("c".getBytes())
         };
         Records records = MemoryRecords.withRecords(0L, CompressionType.NONE, 1, appendRecords);
         CompletableFuture<OffsetAndEpoch> future = stateMachine.append(records);
@@ -582,20 +582,15 @@ public class KafkaRaftClientTest {
         int otherNodeId = 1;
         int leaderEpoch = 2;
         Set<Integer> voters = Utils.mkSet(localId, otherNodeId);
-
         quorumStateStore.writeElectionState(ElectionState.withVotedCandidate(leaderEpoch, localId, voters));
-
         KafkaRaftClient client = buildClient(voters);
 
         pollUntilSend(client);
         assertSentFindQuorumRequest();
 
         deliverRequest(voteRequest(leaderEpoch, otherNodeId, leaderEpoch - 1, 1));
-
         client.poll();
-
         assertSentVoteResponse(Errors.NONE, leaderEpoch, OptionalInt.empty(), false);
-
         assertEquals(ElectionState.withVotedCandidate(leaderEpoch, localId, voters),
             quorumStateStore.readElectionState());
     }
@@ -1460,7 +1455,7 @@ public class KafkaRaftClientTest {
         assertNotNull(getMetric(metrics, "log-end-offset"));
         assertNotNull(getMetric(metrics, "log-end-epoch"));
         assertNotNull(getMetric(metrics, "boot-timestamp"));
-        assertNotNull(getMetric(metrics, "voter-connections-size"));
+        assertNotNull(getMetric(metrics, "number-voter-connections"));
         assertNotNull(getMetric(metrics, "poll-idle-ratio-avg"));
         assertNotNull(getMetric(metrics, "replication-latency-avg"));
         assertNotNull(getMetric(metrics, "replication-latency-max"));
@@ -1471,7 +1466,7 @@ public class KafkaRaftClientTest {
 
         assertEquals("leader", getMetric(metrics, "current-state").metricValue());
         assertEquals((double) localId, getMetric(metrics, "current-leader").metricValue());
-        assertEquals((double) -1, getMetric(metrics, "current-vote").metricValue());
+        assertEquals((double) localId, getMetric(metrics, "current-vote").metricValue());
         assertEquals((double) epoch, getMetric(metrics, "current-epoch").metricValue());
         assertEquals((double) 0L, getMetric(metrics, "high-watermark").metricValue());
         assertEquals((double) 1L, getMetric(metrics, "log-end-offset").metricValue());
@@ -1479,9 +1474,9 @@ public class KafkaRaftClientTest {
         assertEquals((double) time.milliseconds(), getMetric(metrics, "boot-timestamp").metricValue());
 
         SimpleRecord[] appendRecords = new SimpleRecord[] {
-                new SimpleRecord("a".getBytes()),
-                new SimpleRecord("b".getBytes()),
-                new SimpleRecord("c".getBytes())
+            new SimpleRecord("a".getBytes()),
+            new SimpleRecord("b".getBytes()),
+            new SimpleRecord("c".getBytes())
         };
         Records records = MemoryRecords.withRecords(0L, CompressionType.NONE, 1, appendRecords);
         stateMachine.append(records);
