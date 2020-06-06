@@ -219,15 +219,15 @@ public class KafkaRaftMetricsTest {
         assertEquals((double) 900, getMetric(metrics, "election-latency-avg").metricValue());
         assertEquals((double) 1000, getMetric(metrics, "election-latency-max").metricValue());
 
-        raftMetrics.updateReplicationLatency(50.5, time.milliseconds());
+        raftMetrics.updateCommitLatency(50.5, time.milliseconds());
 
-        assertEquals(50.5, getMetric(metrics, "replication-latency-avg").metricValue());
-        assertEquals(50.5, getMetric(metrics, "replication-latency-max").metricValue());
+        assertEquals(50.5, getMetric(metrics, "commit-latency-avg").metricValue());
+        assertEquals(50.5, getMetric(metrics, "commit-latency-max").metricValue());
 
-        raftMetrics.updateReplicationLatency(41.5, time.milliseconds());
+        raftMetrics.updateCommitLatency(41.5, time.milliseconds());
 
-        assertEquals(46.0, getMetric(metrics, "replication-latency-avg").metricValue());
-        assertEquals(50.5, getMetric(metrics, "replication-latency-max").metricValue());
+        assertEquals(46.0, getMetric(metrics, "commit-latency-avg").metricValue());
+        assertEquals(50.5, getMetric(metrics, "commit-latency-max").metricValue());
     }
 
     @Test

@@ -1457,8 +1457,8 @@ public class KafkaRaftClientTest {
         assertNotNull(getMetric(metrics, "boot-timestamp"));
         assertNotNull(getMetric(metrics, "number-voter-connections"));
         assertNotNull(getMetric(metrics, "poll-idle-ratio-avg"));
-        assertNotNull(getMetric(metrics, "replication-latency-avg"));
-        assertNotNull(getMetric(metrics, "replication-latency-max"));
+        assertNotNull(getMetric(metrics, "commit-latency-avg"));
+        assertNotNull(getMetric(metrics, "commit-latency-max"));
         assertNotNull(getMetric(metrics, "election-latency-avg"));
         assertNotNull(getMetric(metrics, "election-latency-max"));
         assertNotNull(getMetric(metrics, "fetch-records-rate"));
