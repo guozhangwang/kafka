@@ -266,13 +266,13 @@ public class KafkaRaftClient implements RaftClient {
             onBecomeLeader(quorum.leaderStateOrThrow());
         } else if (quorum.isCandidate()) {
             // If the quorum consists of a single node, we can become leader immediately
-            timer.reset(electionTimeoutMs + randomElectionJitterMs());
+            timer.reset(randomElectionTimeoutMs());
             maybeBecomeLeader(quorum.candidateStateOrThrow());
         } else if (quorum.isFollower()) {
             FollowerState state = quorum.followerStateOrThrow();
             if (quorum.isVoter() && quorum.epoch() == 0) {
                 // If we're initializing for the first time, become a candidate immediately
-                becomeCandidate();
+                becomeCandidate(0);
             } else {
                 if (state.hasLeader())
                     onBecomeFollowerOfElectedLeader(quorum.followerStateOrThrow());
@@ -322,10 +322,10 @@ public class KafkaRaftClient implements RaftClient {
         }
     }
 
-    private void becomeCandidate() throws IOException {
+    private void becomeCandidate(int retries) throws IOException {
         // after we become candidate, we may not fetch from leader any more
-        timer.reset(electionTimeoutMs + randomElectionJitterMs());
-        CandidateState state = quorum.becomeCandidate();
+        timer.reset(randomElectionTimeoutMs());
+        CandidateState state = quorum.becomeCandidate(retries);
         maybeBecomeLeader(state);
         resetConnections();
     }
@@ -333,16 +333,30 @@ public class KafkaRaftClient implements RaftClient {
     private void becomeUnattachedFollower(int epoch) throws IOException {
         if (quorum.becomeUnattachedFollower(epoch)) {
             resetConnections();
+            // even though we've voted for someone, it still means that the previous leader
+            // would be replaced by a new one and there's no clear winner yet, so
+            // setting the timer to election timeout would allow this member
+            // to participate in the election as well
+
+            // if we are voter, becoming unattached also means that we would no longer fetch
+            // from whoever the old leader already, while there's no new leader learned yet.
+            // So this member should qualify to elect as leader as well, and hence we shorten
+            // the timer to election timeout;
+            //
+            // if we are observer, nothing needed to be done as we would still try to find-quorum eventually
             if (quorum.isVoter()) {
-                timer.reset(randomElectionJitterMs());
+                timer.reset(Math.min(timer.remainingMs(), randomElectionTimeoutMs()));
             }
-            // if we are observer, do not reset fetch timer so that we will still find-quorum in time
         }
     }
 
     private void becomeVotedFollower(int candidateId, int epoch) throws IOException {
         if (quorum.becomeVotedFollower(epoch, candidateId)) {
-            timer.reset(electionTimeoutMs + randomElectionJitterMs());
+            // even though we've voted for someone, it still means that the previous leader
+            // would be replaced by a new one and there's no clear winner yet, so
+            // setting the timer to election timeout would allow this member
+            // to participate in the election as well
+            timer.reset(randomElectionTimeoutMs());
             resetConnections();
         }
     }
@@ -474,10 +488,13 @@ public class KafkaRaftClient implements RaftClient {
                     maybeBecomeLeader(state);
                 } else {
                     state.recordRejectedVote(remoteNodeId);
-                    if (state.isVoteRejected()) {
+                    if (state.isVoteRejected() && !state.isBackingOff()) {
                         logger.info("Insufficient remaining votes to become leader (rejected by {}). " +
-                                "We will await expiration of election timeout before retrying",
+                                "We will backoff at most the election jitter before retrying",
                             state.rejectingVoters());
+
+                        state.recordElectionFailed();
+                        timer.reset(exponentialElectionBackoffMs(state.retries()));
                     }
                 }
             }
@@ -487,10 +504,19 @@ public class KafkaRaftClient implements RaftClient {
         }
     }
 
-    private int randomElectionJitterMs() {
-        if (electionJitterMs == 0)
+    private int randomElectionTimeoutMs() {
+        if (electionTimeoutMs == 0)
             return 0;
-        return random.nextInt(electionJitterMs);
+        // avoiding float calculations here
+        return electionTimeoutMs + random.nextInt(electionTimeoutMs);
+    }
+
+    private int exponentialElectionBackoffMs(int retries) {
+        if (retries == 0)
+            return 0;
+
+        int retryBackOffBaseMs = electionJitterMs / 32;
+        return Math.min(retryBackOffBaseMs * random.nextInt(2 ^ retries - 1), electionJitterMs);
     }
 
     private BeginQuorumEpochResponseData buildBeginQuorumEpochResponse(Errors error) {
@@ -582,7 +608,8 @@ public class KafkaRaftClient implements RaftClient {
                 || state.hasVotedFor(requestReplicaId)) {
                 // reset the timer to election jitter so that they would become candidate
                 // after a pretty short period of time
-                timer.reset(randomElectionJitterMs());
+                // TODO: with KCORE-444 we should set it according to the sorted successor list
+                timer.reset(exponentialElectionBackoffMs(0));
             }
         } // else if we are already leader or a candidate, then we take no action
 
@@ -1242,10 +1269,17 @@ public class KafkaRaftClient implements RaftClient {
 
             if (quorum.isVoter() && !quorum.isLeader() && timer.isExpired()) {
                 logger.debug("Become candidate due to fetch timeout");
-                becomeCandidate();
+                becomeCandidate(0);
             } else if (quorum.isCandidate() && timer.isExpired()) {
-                logger.debug("Re-elect as candidate due to election timeout");
-                becomeCandidate();
+                CandidateState state = quorum.candidateStateOrThrow();
+                if (state.isBackingOff()) {
+                    logger.debug("Re-elect as candidate after election backoff has completed");
+                    becomeCandidate(state.retries());
+                } else {
+                    logger.debug("Election has timed out, backing off before re-elect again");
+                    state.recordElectionFailed();
+                    timer.reset(exponentialElectionBackoffMs(state.retries()));
+                }
             }
 
             maybeSendRequests(timer.currentTimeMs());
