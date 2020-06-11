@@ -25,6 +25,7 @@ import org.apache.kafka.common.metrics.stats.Max;
 import org.apache.kafka.common.metrics.stats.Rate;
 import org.apache.kafka.common.metrics.stats.WindowedSum;
 import org.apache.kafka.raft.FollowerState;
+import org.apache.kafka.raft.OffsetAndEpoch;
 import org.apache.kafka.raft.QuorumState;
 
 import java.util.concurrent.TimeUnit;
@@ -34,9 +35,9 @@ public class KafkaRaftMetrics implements AutoCloseable {
     private final Metrics metrics;
     private final long bootTimestamp;
 
-    private long logEndOffset;
-    private int logEndEpoch;
+    private OffsetAndEpoch logEndOffset;
     private int numVoterConnections;
+    private long electionStartMs;
     private long pollStartMs;
     private long pollEndMs;
 
@@ -62,9 +63,9 @@ public class KafkaRaftMetrics implements AutoCloseable {
 
         this.pollStartMs = 0L;
         this.pollEndMs = 0L;
-        this.logEndOffset = 0L;
-        this.logEndEpoch = 0;
+        this.electionStartMs = -1L;
         this.numVoterConnections = 0;
+        this.logEndOffset = new OffsetAndEpoch(0L, 0);
 
         this.currentStateMetricName = metrics.metricName("current-state", metricGroupName, "The current state of this member; possible values are leader, candidate, voter, observer");
         Gauge<String> stateProvider = (mConfig, currentTimeMs) -> {
@@ -104,15 +105,15 @@ public class KafkaRaftMetrics implements AutoCloseable {
         metrics.addMetric(this.highWatermarkMetricName, (mConfig, currentTimeMs) -> state.highWatermark().orElse(-1L));
 
         this.logEndOffsetMetricName = metrics.metricName("log-end-offset", metricGroupName, "The current raft log end offset.");
-        metrics.addMetric(this.logEndOffsetMetricName, (mConfig, currentTimeMs) -> logEndOffset);
+        metrics.addMetric(this.logEndOffsetMetricName, (mConfig, currentTimeMs) -> logEndOffset.offset);
 
         this.logEndEpochMetricName = metrics.metricName("log-end-epoch", metricGroupName, "The current raft log end epoch.");
-        metrics.addMetric(this.logEndEpochMetricName, (mConfig, currentTimeMs) -> logEndEpoch);
+        metrics.addMetric(this.logEndEpochMetricName, (mConfig, currentTimeMs) -> logEndOffset.epoch);
 
         this.bootTimestampMetricName = metrics.metricName("boot-timestamp", metricGroupName, "The bootstrapped timestamp of this member.");
         metrics.addMetric(this.bootTimestampMetricName, (mConfig, currentTimeMs) -> bootTimestamp);
 
-        this.numVoterConnectionsMetricName = metrics.metricName("number-voter-connections", metricGroupName, "The number of voter connections recognized at this member.");
+        this.numVoterConnectionsMetricName = metrics.metricName("number-unknown-voter-connections", metricGroupName, "The number of voter connections recognized at this member.");
         metrics.addMetric(this.numVoterConnectionsMetricName, (mConfig, currentTimeMs) -> numVoterConnections);
 
         this.pollIdleSensor = metrics.sensor("poll-idle-ratio");
@@ -148,7 +149,7 @@ public class KafkaRaftMetrics implements AutoCloseable {
         if (pollEndMs != 0L) {
             long pollTimeMs = Math.max(pollEndMs - pollStartMs, 0L);
             long totalTimeMs = Math.max(currentTimeMs - pollStartMs, 1L);
-            this.pollIdleSensor.record(pollTimeMs * 1.0 / totalTimeMs, currentTimeMs);
+            this.pollIdleSensor.record(pollTimeMs / (double) totalTimeMs, currentTimeMs);
         }
 
         this.pollStartMs = currentTimeMs;
@@ -158,12 +159,11 @@ public class KafkaRaftMetrics implements AutoCloseable {
         this.pollEndMs = currentTimeMs;
     }
 
-    public void updateLogEnd(long offset, int epoch) {
-        logEndOffset = offset;
-        logEndEpoch = epoch;
+    public void updateLogEnd(OffsetAndEpoch logEndOffset) {
+        this.logEndOffset = logEndOffset;
     }
 
-    public void updateNumVoterConnections(int numVoterConnections) {
+    public void updateNumUnknownVoterConnections(int numVoterConnections) {
         this.numVoterConnections = numVoterConnections;
     }
 
@@ -181,6 +181,17 @@ public class KafkaRaftMetrics implements AutoCloseable {
 
     public void updateElectionLatency(double latencyMs, long currentTimeMs) {
         electionTimeSensor.record(latencyMs, currentTimeMs);
+    }
+
+    public void updateElectionStartMs(long currentTimeMs) {
+        electionStartMs = currentTimeMs;
+    }
+
+    public void maybeUpdateElectionLatency(long currentTimeMs) {
+        if (electionStartMs > 0L) {
+            electionTimeSensor.record(currentTimeMs - electionStartMs, currentTimeMs);
+            electionStartMs = -1L;
+        }
     }
 
     @Override

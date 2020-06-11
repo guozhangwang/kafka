@@ -162,23 +162,23 @@ public class KafkaRaftMetricsTest {
         assertEquals((double) 0L, getMetric(metrics, "log-end-offset").metricValue());
         assertEquals((double) 0, getMetric(metrics, "log-end-epoch").metricValue());
 
-        raftMetrics.updateLogEnd(5L, 1);
+        raftMetrics.updateLogEnd(new OffsetAndEpoch(5L, 1));
 
         assertEquals((double) 5L, getMetric(metrics, "log-end-offset").metricValue());
         assertEquals((double) 1, getMetric(metrics, "log-end-epoch").metricValue());
     }
 
     @Test
-    public void shouldRecordNumVoterConnections() throws IOException {
+    public void shouldRecordNumUnknownVoterConnections() throws IOException {
         state = new QuorumState(localId, Collections.singleton(localId), new MockQuorumStateStore(), new LogContext("kafka-raft-metrics-test"));
         state.initialize(new OffsetAndEpoch(0L, 0));
         raftMetrics = new KafkaRaftMetrics(metrics, "raft", state, time.milliseconds());
 
-        assertEquals((double) 0, getMetric(metrics, "number-voter-connections").metricValue());
+        assertEquals((double) 0, getMetric(metrics, "number-unknown-voter-connections").metricValue());
 
-        raftMetrics.updateNumVoterConnections(2);
+        raftMetrics.updateNumUnknownVoterConnections(2);
 
-        assertEquals((double) 2, getMetric(metrics, "number-voter-connections").metricValue());
+        assertEquals((double) 2, getMetric(metrics, "number-unknown-voter-connections").metricValue());
     }
 
     @Test
