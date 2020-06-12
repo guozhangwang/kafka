@@ -139,7 +139,7 @@ public class KafkaRaftClient implements RaftClient {
     // unwritten appends are those which have not been applied to the leader's local log;
     // uncommitted appends are those which have applied to the leader's local log but have not committed among the quorum.
     private final BlockingQueue<UnwrittenAppend> unwrittenAppends;
-    private final SortedMap<OffsetAndEpoch, AppendBatchAndTime> uncommittedAppends;
+    private final SortedMap<OffsetAndEpoch, AppendedInfo> uncommittedAppends;
 
     private ReplicatedStateMachine stateMachine;
 
@@ -215,30 +215,31 @@ public class KafkaRaftClient implements RaftClient {
         quorum.highWatermark().ifPresent(highWatermark -> {
             log.updateHighWatermark(highWatermark);
             maybeCommitPendingAppends(highWatermark, time.milliseconds());
-
-            logger.debug("Applying committed entries up to high watermark {}. " +
-                "Current position is {}", highWatermark, stateMachine.position());
-
-            while (stateMachine.position().offset < highWatermark && shutdown.get() == null) {
-                OffsetAndEpoch position = stateMachine.position();
-                Records records = readCommitted(position, highWatermark);
-
-                stateMachine.apply(records);
-                logger.trace("Applied committed records at {} to the state machine; position " +
-                    "updated to {}", position, stateMachine.position());
-            }
         });
     }
 
     private void maybeCommitPendingAppends(long highWatermark, long currentTimeMs) {
-        Iterator<Map.Entry<OffsetAndEpoch, AppendBatchAndTime>> iter = uncommittedAppends.entrySet().iterator();
+        logger.error("Applying committed entries up to high watermark {}. " +
+                "Current position is {}", highWatermark, stateMachine.position());
+
+        // note we assume that the high-watermark would never advances partial batches, but would always
+        // on batch boundaries; if it is not the case then this logic would break
+        Iterator<Map.Entry<OffsetAndEpoch, AppendedInfo>> iter = uncommittedAppends.entrySet().iterator();
         while (iter.hasNext()) {
-            Map.Entry<OffsetAndEpoch, AppendBatchAndTime> entry = iter.next();
+            Map.Entry<OffsetAndEpoch, AppendedInfo> entry = iter.next();
             OffsetAndEpoch offsetAndEpoch = entry.getKey();
-            if (offsetAndEpoch.offset < highWatermark) {
-                AppendBatchAndTime appendBatchAndTime = entry.getValue();
-                double elapsedTimePerRecord = (currentTimeMs - appendBatchAndTime.appendTimeMs) / (double) appendBatchAndTime.numRecords;
+            if (offsetAndEpoch.offset < highWatermark && shutdown.get() == null) {
+                AppendedInfo appendedInfo = entry.getValue();
+
+                double elapsedTimePerRecord = (currentTimeMs - appendedInfo.appendTimeMs) / (double) appendedInfo.numRecords;
                 kafkaRaftMetrics.updateCommitLatency(elapsedTimePerRecord, currentTimeMs);
+
+                OffsetAndEpoch position = stateMachine.position();
+                Records records = appendedInfo.records;
+                stateMachine.apply(records, appendedInfo.baseOffset);
+                logger.error("Applied committed records at {} to the state machine; position " +
+                        "updated to {}", position, stateMachine.position());
+
                 iter.remove();
             } else {
                 break;
@@ -346,9 +347,13 @@ public class KafkaRaftClient implements RaftClient {
     private void appendControlRecord(Records controlRecord) {
         if (shutdown.get() != null)
             throw new IllegalStateException("Cannot append records while we are shutting down");
-        log.appendAsLeader(controlRecord, quorum.epoch());
+        LogAppendInfo logAppendInfo = log.appendAsLeader(controlRecord, quorum.epoch());
+
         kafkaRaftMetrics.updateAppendRecords(1);
         kafkaRaftMetrics.updateLogEnd(endOffset());
+
+        AppendedInfo appendedInfo = new AppendedInfo(controlRecord, logAppendInfo.firstOffset, logAppendInfo.lastOffset, time.milliseconds());
+        uncommittedAppends.put(new OffsetAndEpoch(logAppendInfo.lastOffset, quorum.epoch()), appendedInfo);
     }
 
     private void maybeBecomeLeader(CandidateState state) throws IOException {
@@ -1373,7 +1378,7 @@ public class KafkaRaftClient implements RaftClient {
                 if (info != null) {
                     OffsetAndEpoch offsetAndEpoch = new OffsetAndEpoch(info.lastOffset, epoch);
                     unwrittenAppend.complete(offsetAndEpoch);
-                    uncommittedAppends.put(offsetAndEpoch, new AppendBatchAndTime(info.lastOffset - info.firstOffset + 1, currentTimeMs));
+                    uncommittedAppends.put(offsetAndEpoch, new AppendedInfo(unwrittenAppend.records, info.firstOffset, info.lastOffset, currentTimeMs));
                 } else {
                     unwrittenAppend.fail(new InvalidRequestException("Leader refused the append"));
                 }
@@ -1405,21 +1410,6 @@ public class KafkaRaftClient implements RaftClient {
         }
         channel.wakeup();
         return future;
-    }
-
-    /**
-     * Read from the local log. This will only return records which have been committed to the quorum.
-     * @param offsetAndEpoch The first offset to read from and the previous consumed epoch
-     * @param highWatermark The current high watermark
-     * @return A set of records beginning at the request offset
-     */
-    private Records readCommitted(OffsetAndEpoch offsetAndEpoch, long highWatermark) {
-        Optional<OffsetAndEpoch> endOffset = log.endOffsetForEpoch(offsetAndEpoch.epoch);
-        if (!endOffset.isPresent() || offsetAndEpoch.offset > endOffset.get().offset) {
-            throw new LogTruncationException("The requested offset and epoch " + offsetAndEpoch +
-                    " are not in range. The closest offset we found is " + endOffset + ".");
-        }
-        return log.read(offsetAndEpoch.offset, OptionalLong.of(highWatermark));
     }
 
     @Override
@@ -1504,17 +1494,23 @@ public class KafkaRaftClient implements RaftClient {
         }
     }
 
-    private static class AppendBatchAndTime {
+    private static class AppendedInfo {
+        private final Records records;
+        private final long baseOffset;
+        private final long lastOffset;
         private final long numRecords;
         private final long appendTimeMs;
 
-        private AppendBatchAndTime(long numRecords, long appendTimeMs) {
+        private AppendedInfo(Records records, long baseOffset, long lastOffset, long appendTimeMs) {
+            this.numRecords = lastOffset - baseOffset + 1;
             if (numRecords <= 0) {
                 throw new IllegalArgumentException("Number of records appended in this batch should always be positive");
             }
 
+            this.records = records;
             this.appendTimeMs = appendTimeMs;
-            this.numRecords = numRecords;
+            this.baseOffset = baseOffset;
+            this.lastOffset = lastOffset;
         }
     }
 }

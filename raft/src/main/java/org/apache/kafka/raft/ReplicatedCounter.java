@@ -73,17 +73,18 @@ public class ReplicatedCounter implements ReplicatedStateMachine {
     }
 
     @Override
-    public synchronized void apply(Records records) {
+    public synchronized void apply(Records records, long baseOffset) {
         for (RecordBatch batch : records.batches()) {
             if (!batch.isControlBatch()) {
                 for (Record record : batch) {
+                    long offset = record.offset() + baseOffset;
                     int value = deserialize(record);
 
                     if (value != committed.get() + 1) {
-                        throw new IllegalStateException("Node " + nodeId + " detected invalid increment in record at offset " + record.offset() +
+                        throw new IllegalStateException("Node " + nodeId + " detected invalid increment in record at offset " + offset +
                                                             ", epoch " + batch.partitionLeaderEpoch() + ": " + committed.get() + " -> " + value);
                     }
-                    log.trace("Applied counter update at offset {}: {} -> {}", record.offset(), committed.get(), value);
+                    log.trace("Applied counter update at offset {}: {} -> {}", offset, committed.get(), value);
                     committed.set(value);
 
                     if (verbose) {
