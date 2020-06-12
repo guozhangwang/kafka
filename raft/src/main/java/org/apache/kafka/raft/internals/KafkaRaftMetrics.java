@@ -28,6 +28,7 @@ import org.apache.kafka.raft.FollowerState;
 import org.apache.kafka.raft.OffsetAndEpoch;
 import org.apache.kafka.raft.QuorumState;
 
+import java.util.OptionalLong;
 import java.util.concurrent.TimeUnit;
 
 public class KafkaRaftMetrics implements AutoCloseable {
@@ -36,10 +37,10 @@ public class KafkaRaftMetrics implements AutoCloseable {
     private final long bootTimestamp;
 
     private OffsetAndEpoch logEndOffset;
-    private int numVoterConnections;
-    private long electionStartMs;
-    private long pollStartMs;
-    private long pollEndMs;
+    private int numUnknownVoterConnections;
+    private OptionalLong electionStartMs;
+    private OptionalLong pollStartMs;
+    private OptionalLong pollEndMs;
 
     private final MetricName currentLeaderIdMetricName;
     private final MetricName currentVotedIdMetricName;
@@ -49,7 +50,7 @@ public class KafkaRaftMetrics implements AutoCloseable {
     private final MetricName logEndOffsetMetricName;
     private final MetricName logEndEpochMetricName;
     private final MetricName bootTimestampMetricName;
-    private final MetricName numVoterConnectionsMetricName;
+    private final MetricName numUnknownVoterConnectionsMetricName;
     private final Sensor commitTimeSensor;
     private final Sensor electionTimeSensor;
     private final Sensor fetchRecordsSensor;
@@ -61,13 +62,13 @@ public class KafkaRaftMetrics implements AutoCloseable {
         this.bootTimestamp = timestamp;
         String metricGroupName = metricGrpPrefix + "-metrics";
 
-        this.pollStartMs = 0L;
-        this.pollEndMs = 0L;
-        this.electionStartMs = -1L;
-        this.numVoterConnections = 0;
+        this.pollStartMs = OptionalLong.empty();
+        this.pollEndMs = OptionalLong.empty();
+        this.electionStartMs = OptionalLong.empty();
+        this.numUnknownVoterConnections = 0;
         this.logEndOffset = new OffsetAndEpoch(0L, 0);
 
-        this.currentStateMetricName = metrics.metricName("current-state", metricGroupName, "The current state of this member; possible values are leader, candidate, voter, observer");
+        this.currentStateMetricName = metrics.metricName("current-state", metricGroupName, "The current state of this member; possible values are leader, candidate, follower, observer");
         Gauge<String> stateProvider = (mConfig, currentTimeMs) -> {
             if (state.isLeader()) {
                 return "leader";
@@ -75,7 +76,7 @@ public class KafkaRaftMetrics implements AutoCloseable {
                 return "candidate";
             } else {
                 if (state.isVoter())
-                    return "voter";
+                    return "follower";
                 else
                     return "observer";
             }
@@ -113,14 +114,8 @@ public class KafkaRaftMetrics implements AutoCloseable {
         this.bootTimestampMetricName = metrics.metricName("boot-timestamp", metricGroupName, "The bootstrapped timestamp of this member.");
         metrics.addMetric(this.bootTimestampMetricName, (mConfig, currentTimeMs) -> bootTimestamp);
 
-        this.numVoterConnectionsMetricName = metrics.metricName("number-unknown-voter-connections", metricGroupName, "The number of voter connections recognized at this member.");
-        metrics.addMetric(this.numVoterConnectionsMetricName, (mConfig, currentTimeMs) -> numVoterConnections);
-
-        this.pollIdleSensor = metrics.sensor("poll-idle-ratio");
-        this.pollIdleSensor.add(metrics.metricName("poll-idle-ratio-avg",
-                metricGroupName,
-                "The average fraction of time the consumer's poll() is idle as opposed to waiting for the user code to process records."),
-                new Avg());
+        this.numUnknownVoterConnectionsMetricName = metrics.metricName("number-unknown-voter-connections", metricGroupName, "The number of voter connections recognized at this member.");
+        metrics.addMetric(this.numUnknownVoterConnectionsMetricName, (mConfig, currentTimeMs) -> numUnknownVoterConnections);
 
         this.commitTimeSensor = metrics.sensor("commit-latency");
         this.commitTimeSensor.add(metrics.metricName("commit-latency-avg", metricGroupName,
@@ -143,28 +138,35 @@ public class KafkaRaftMetrics implements AutoCloseable {
         this.appendRecordsSensor.add(metrics.metricName("append-records-rate", metricGroupName,
                 "The average number of records appended per sec as the leader of the raft quorum."),
                 new Rate(TimeUnit.SECONDS, new WindowedSum()));
+
+        this.pollIdleSensor = metrics.sensor("poll-idle-ratio");
+        this.pollIdleSensor.add(metrics.metricName("poll-idle-ratio-avg",
+                metricGroupName,
+                "The average fraction of time the consumer's poll() is idle as opposed to waiting for the user code to process records."),
+                new Avg());
     }
 
     public void updatePollStart(long currentTimeMs) {
-        if (pollEndMs != 0L) {
-            long pollTimeMs = Math.max(pollEndMs - pollStartMs, 0L);
-            long totalTimeMs = Math.max(currentTimeMs - pollStartMs, 1L);
+        if (pollEndMs.isPresent() && pollStartMs.isPresent()) {
+            long pollTimeMs = Math.max(pollEndMs.getAsLong() - pollStartMs.getAsLong(), 0L);
+            long totalTimeMs = Math.max(currentTimeMs - pollStartMs.getAsLong(), 1L);
             this.pollIdleSensor.record(pollTimeMs / (double) totalTimeMs, currentTimeMs);
         }
 
-        this.pollStartMs = currentTimeMs;
+        this.pollStartMs = OptionalLong.of(currentTimeMs);
+        this.pollEndMs = OptionalLong.empty();
     }
 
     public void updatePollEnd(long currentTimeMs) {
-        this.pollEndMs = currentTimeMs;
+        this.pollEndMs = OptionalLong.of(currentTimeMs);
     }
 
     public void updateLogEnd(OffsetAndEpoch logEndOffset) {
         this.logEndOffset = logEndOffset;
     }
 
-    public void updateNumUnknownVoterConnections(int numVoterConnections) {
-        this.numVoterConnections = numVoterConnections;
+    public void updateNumUnknownVoterConnections(int numUnknownVoterConnections) {
+        this.numUnknownVoterConnections = numUnknownVoterConnections;
     }
 
     public void updateAppendRecords(long numRecords) {
@@ -179,18 +181,14 @@ public class KafkaRaftMetrics implements AutoCloseable {
         commitTimeSensor.record(latencyMs, currentTimeMs);
     }
 
-    public void updateElectionLatency(double latencyMs, long currentTimeMs) {
-        electionTimeSensor.record(latencyMs, currentTimeMs);
-    }
-
     public void updateElectionStartMs(long currentTimeMs) {
-        electionStartMs = currentTimeMs;
+        electionStartMs = OptionalLong.of(currentTimeMs);
     }
 
     public void maybeUpdateElectionLatency(long currentTimeMs) {
-        if (electionStartMs > 0L) {
-            electionTimeSensor.record(currentTimeMs - electionStartMs, currentTimeMs);
-            electionStartMs = -1L;
+        if (electionStartMs.isPresent()) {
+            electionTimeSensor.record(currentTimeMs - electionStartMs.getAsLong(), currentTimeMs);
+            electionStartMs = OptionalLong.empty();
         }
     }
 
@@ -204,7 +202,7 @@ public class KafkaRaftMetrics implements AutoCloseable {
         metrics.removeMetric(logEndOffsetMetricName);
         metrics.removeMetric(logEndEpochMetricName);
         metrics.removeMetric(bootTimestampMetricName);
-        metrics.removeMetric(numVoterConnectionsMetricName);
+        metrics.removeMetric(numUnknownVoterConnectionsMetricName);
 
         metrics.removeSensor(commitTimeSensor.name());
         metrics.removeSensor(electionTimeSensor.name());

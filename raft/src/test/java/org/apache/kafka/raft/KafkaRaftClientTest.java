@@ -100,7 +100,7 @@ public class KafkaRaftClientTest {
     }
 
     private KafkaRaftClient buildClient(Set<Integer> voters) throws IOException {
-        return buildClient(voters, new MockStateMachine());
+        return buildClient(voters, stateMachine);
     }
 
     private KafkaRaftClient buildClient(Set<Integer> voters, ReplicatedStateMachine stateMachine) throws IOException {

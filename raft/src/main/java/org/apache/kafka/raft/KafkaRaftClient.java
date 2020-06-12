@@ -237,7 +237,8 @@ public class KafkaRaftClient implements RaftClient {
             OffsetAndEpoch offsetAndEpoch = entry.getKey();
             if (offsetAndEpoch.offset < highWatermark) {
                 AppendBatchAndTime appendBatchAndTime = entry.getValue();
-                double elapsedTimePerRecord = (currentTimeMs - appendBatchAndTime.appendTimeMs) / (double) appendBatchAndTime.numRecords;
+                long elapsedTime = Math.max(0, currentTimeMs - appendBatchAndTime.appendTimeMs);
+                double elapsedTimePerRecord = elapsedTime / (double) appendBatchAndTime.numRecords;
                 kafkaRaftMetrics.updateCommitLatency(elapsedTimePerRecord, currentTimeMs);
                 iter.remove();
             } else {
@@ -1333,7 +1334,6 @@ public class KafkaRaftClient implements RaftClient {
             pollShutdown(gracefulShutdown);
         } else {
             timer.update();
-            long currentTimeMs = timer.currentTimeMs();
 
             if (quorum.isVoter() && !quorum.isLeader() && timer.isExpired()) {
                 logger.debug("Become candidate due to fetch timeout");
@@ -1343,18 +1343,23 @@ public class KafkaRaftClient implements RaftClient {
                 becomeCandidate();
             }
 
+            timer.update();
+            long currentTimeMs = timer.currentTimeMs();
+
             maybeSendRequests(currentTimeMs);
             handlePendingAppends(currentTimeMs);
 
-            // TODO: Receive time needs to take into account backing off operations that still need doing
+            timer.update();
+            currentTimeMs = timer.currentTimeMs();
             kafkaRaftMetrics.updatePollStart(currentTimeMs);
+            // TODO: Receive time needs to take into account backing off operations that still need doing
             List<RaftMessage> inboundMessages = channel.receive(timer.remainingMs());
             timer.update();
             currentTimeMs = timer.currentTimeMs();
             kafkaRaftMetrics.updatePollEnd(currentTimeMs);
 
             for (RaftMessage message : inboundMessages)
-                handleInboundMessage(message, timer.currentTimeMs());
+                handleInboundMessage(message, currentTimeMs);
         }
     }
 
