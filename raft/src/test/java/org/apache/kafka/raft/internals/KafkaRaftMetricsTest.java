@@ -73,7 +73,7 @@ public class KafkaRaftMetricsTest {
         state.initialize(new OffsetAndEpoch(0L, 0));
         raftMetrics = new KafkaRaftMetrics(metrics, "raft", state, time.milliseconds());
 
-        assertEquals("voter", getMetric(metrics, "current-state").metricValue());
+        assertEquals("follower", getMetric(metrics, "current-state").metricValue());
         assertEquals((double) -1L, getMetric(metrics, "current-leader").metricValue());
         assertEquals((double) -1L, getMetric(metrics, "current-vote").metricValue());
         assertEquals((double) 0, getMetric(metrics, "current-epoch").metricValue());
@@ -99,7 +99,7 @@ public class KafkaRaftMetricsTest {
         assertEquals((double) 5L, getMetric(metrics, "high-watermark").metricValue());
 
         state.becomeFetchingFollower(2, 1);
-        assertEquals("voter", getMetric(metrics, "current-state").metricValue());
+        assertEquals("follower", getMetric(metrics, "current-state").metricValue());
         assertEquals((double) 1, getMetric(metrics, "current-leader").metricValue());
         assertEquals((double) -1, getMetric(metrics, "current-vote").metricValue());
         assertEquals((double) 2, getMetric(metrics, "current-epoch").metricValue());
@@ -109,14 +109,14 @@ public class KafkaRaftMetricsTest {
         assertEquals((double) 10L, getMetric(metrics, "high-watermark").metricValue());
 
         state.becomeVotedFollower(3, 2);
-        assertEquals("voter", getMetric(metrics, "current-state").metricValue());
+        assertEquals("follower", getMetric(metrics, "current-state").metricValue());
         assertEquals((double) -1, getMetric(metrics, "current-leader").metricValue());
         assertEquals((double) 2, getMetric(metrics, "current-vote").metricValue());
         assertEquals((double) 3, getMetric(metrics, "current-epoch").metricValue());
         assertEquals((double) -1L, getMetric(metrics, "high-watermark").metricValue());
 
         state.becomeUnattachedFollower(4);
-        assertEquals("voter", getMetric(metrics, "current-state").metricValue());
+        assertEquals("follower", getMetric(metrics, "current-state").metricValue());
         assertEquals((double) -1, getMetric(metrics, "current-leader").metricValue());
         assertEquals((double) -1, getMetric(metrics, "current-vote").metricValue());
         assertEquals((double) 4, getMetric(metrics, "current-epoch").metricValue());
@@ -209,25 +209,29 @@ public class KafkaRaftMetricsTest {
         state.initialize(new OffsetAndEpoch(0L, 0));
         raftMetrics = new KafkaRaftMetrics(metrics, "raft", state, time.milliseconds());
 
-        raftMetrics.updateElectionLatency(1000, time.milliseconds());
+        raftMetrics.updateElectionStartMs(time.milliseconds());
+        time.sleep(1000L);
+        raftMetrics.maybeUpdateElectionLatency(time.milliseconds());
 
         assertEquals((double) 1000, getMetric(metrics, "election-latency-avg").metricValue());
         assertEquals((double) 1000, getMetric(metrics, "election-latency-max").metricValue());
 
-        raftMetrics.updateElectionLatency(800, time.milliseconds());
+        raftMetrics.updateElectionStartMs(time.milliseconds());
+        time.sleep(800L);
+        raftMetrics.maybeUpdateElectionLatency(time.milliseconds());
 
         assertEquals((double) 900, getMetric(metrics, "election-latency-avg").metricValue());
         assertEquals((double) 1000, getMetric(metrics, "election-latency-max").metricValue());
 
-        raftMetrics.updateCommitLatency(50.5, time.milliseconds());
+        raftMetrics.updateCommitLatency(50, time.milliseconds());
 
-        assertEquals(50.5, getMetric(metrics, "commit-latency-avg").metricValue());
-        assertEquals(50.5, getMetric(metrics, "commit-latency-max").metricValue());
+        assertEquals(50.0, getMetric(metrics, "commit-latency-avg").metricValue());
+        assertEquals(50.0, getMetric(metrics, "commit-latency-max").metricValue());
 
-        raftMetrics.updateCommitLatency(41.5, time.milliseconds());
+        raftMetrics.updateCommitLatency(60, time.milliseconds());
 
-        assertEquals(46.0, getMetric(metrics, "commit-latency-avg").metricValue());
-        assertEquals(50.5, getMetric(metrics, "commit-latency-max").metricValue());
+        assertEquals(55.0, getMetric(metrics, "commit-latency-avg").metricValue());
+        assertEquals(60.0, getMetric(metrics, "commit-latency-max").metricValue());
     }
 
     @Test
