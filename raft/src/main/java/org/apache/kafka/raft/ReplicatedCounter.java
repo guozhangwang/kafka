@@ -92,7 +92,7 @@ public class ReplicatedCounter implements ReplicatedStateMachine {
                     }
                 }
             }
-            this.position = new OffsetAndEpoch(batch.lastOffset() + 1, batch.partitionLeaderEpoch());
+            this.position = new OffsetAndEpoch(baseOffset + batch.lastOffset() + 1, batch.partitionLeaderEpoch());
         }
 
         if (uncommitted != null && committed.get() > uncommitted.get()) {

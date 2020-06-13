@@ -219,7 +219,7 @@ public class KafkaRaftClient implements RaftClient {
     }
 
     private void maybeCommitPendingAppends(long highWatermark, long currentTimeMs) {
-        logger.error("Applying committed entries up to high watermark {}. " +
+        logger.debug("Applying committed entries up to high watermark {}. " +
                 "Current position is {}", highWatermark, stateMachine.position());
 
         // note we assume that the high-watermark would never advances partial batches, but would always
@@ -237,7 +237,7 @@ public class KafkaRaftClient implements RaftClient {
                 OffsetAndEpoch position = stateMachine.position();
                 Records records = appendedInfo.records;
                 stateMachine.apply(records, appendedInfo.baseOffset);
-                logger.error("Applied committed records at {} to the state machine; position " +
+                logger.trace("Applied committed records at {} to the state machine; position " +
                         "updated to {}", position, stateMachine.position());
 
                 iter.remove();

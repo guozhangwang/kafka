@@ -37,7 +37,7 @@ class KafkaMetadataLog(time: Time, log: Log, maxFetchSizeInBytes: Int = 1024 * 1
       FetchLogEnd
 
     val fetchInfo = log.read(startOffset,
-      maxLength = maxFetchSizeInBytes,raft/src/main/java/org/apache/kafka/raft/KafkaRaftClient.java
+      maxLength = maxFetchSizeInBytes,
       isolation = isolation,
       minOneMessage = true)
     fetchInfo.records
