@@ -115,6 +115,8 @@ import static java.util.concurrent.CompletableFuture.completedFuture;
  *
  */
 public class KafkaRaftClient implements RaftClient {
+    private final static int RETRY_BACKOFF_BASE_MS = 100;
+
     private final AtomicReference<GracefulShutdown> shutdown = new AtomicReference<>();
     private final Logger logger;
     private final Time time;
@@ -122,8 +124,6 @@ public class KafkaRaftClient implements RaftClient {
     private final int electionTimeoutMs;
     private final int electionJitterMs;
     private final int fetchTimeoutMs;
-    private final int retryBackoffMs;
-    private final int retryBackOffMaxMs = 1000;
     private final int requestTimeoutMs;
     private final int fetchMaxWaitMs;
     private final long bootTimestamp;
@@ -192,7 +192,6 @@ public class KafkaRaftClient implements RaftClient {
         this.purgatory = purgatory;
         this.time = time;
         this.timer = time.timer(fetchTimeoutMs);    // initialize assuming it is an observer
-        this.retryBackoffMs = retryBackoffMs;
         this.electionTimeoutMs = electionTimeoutMs;
         this.electionJitterMs = electionJitterMs;
         this.fetchTimeoutMs = fetchTimeoutMs;
@@ -574,9 +573,7 @@ public class KafkaRaftClient implements RaftClient {
         if (retries == 0)
             return 0;
 
-        int retryBackOffBaseMs = electionJitterMs / 32;
-
-        return Math.min(retryBackOffBaseMs * random.nextInt(2 << (retries - 1)), electionJitterMs);
+        return Math.min(RETRY_BACKOFF_BASE_MS * random.nextInt(2 << (retries - 1)), electionJitterMs);
     }
     private BeginQuorumEpochResponseData buildBeginQuorumEpochResponse(Errors error) {
         return new BeginQuorumEpochResponseData()
