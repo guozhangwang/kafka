@@ -16,12 +16,12 @@
  */
 package org.apache.kafka.raft;
 
-import java.util.OptionalLong;
+import java.util.Optional;
 
 public interface EpochState {
 
-    default OptionalLong highWatermark() {
-        return OptionalLong.empty();
+    default Optional<LogOffsetMetadata> highWatermark() {
+        return Optional.empty();
     }
 
     ElectionState election();

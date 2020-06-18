@@ -140,7 +140,7 @@ public class KafkaRaftClientTest {
         KafkaRaftClient client = buildClient(voters, stateMachine);
         assertTrue(stateMachine.isLeader());
         assertEquals(epoch, stateMachine.epoch());
-        assertEquals(1L, log.endOffset());
+        assertEquals(1L, log.endOffset().offset);
 
         // Should have sent out connection info query for other node id.
         client.poll();
@@ -156,7 +156,7 @@ public class KafkaRaftClientTest {
 
         KafkaRaftClient client = buildClient(voters);
         assertFalse(stateMachine.isLeader());
-        assertEquals(0L, log.endOffset());
+        assertEquals(0L, log.endOffset().offset);
 
         initializeVoterConnections(client, voters, 1, OptionalInt.empty());
 
@@ -192,13 +192,13 @@ public class KafkaRaftClientTest {
         assertEquals(ElectionState.withElectedLeader(1, localId, voters), quorumStateStore.readElectionState());
 
         // Leader change record appended
-        assertEquals(1, log.endOffset());
+        assertEquals(1, log.endOffset().offset);
 
         // Send BeginQuorumEpoch to voters
         client.poll();
         assertBeginQuorumEpochRequest(1);
 
-        Records records = log.read(0, OptionalLong.of(1));
+        Records records = log.read(0, OptionalLong.of(1)).records;
         RecordBatch batch = records.batches().iterator().next();
         assertTrue(batch.isControlBatch());
 
@@ -1062,7 +1062,7 @@ public class KafkaRaftClientTest {
             fetchRecordsResponse(epoch, otherNodeId, records, 0L, Errors.NONE));
 
         client.poll();
-        assertEquals(0, log.endOffset());
+        assertEquals(0, log.endOffset().offset);
         assertEquals(ElectionState.withVotedCandidate(epoch + 1, localId, voters), quorumStateStore.readElectionState());
     }
 
@@ -1097,7 +1097,7 @@ public class KafkaRaftClientTest {
         deliverResponse(fetchCorrelationId, voter2, response);
 
         client.poll();
-        assertEquals(0, log.endOffset());
+        assertEquals(0, log.endOffset().offset);
         assertEquals(ElectionState.withElectedLeader(epoch + 1, voter3, voters), quorumStateStore.readElectionState());
     }
 
@@ -1405,7 +1405,7 @@ public class KafkaRaftClientTest {
         deliverResponse(fetchQuorumCorrelationId, otherNodeId, response);
 
         client.poll();
-        assertEquals(2L, log.endOffset());
+        assertEquals(2L, log.endOffset().offset);
     }
 
     @Test
@@ -1538,7 +1538,7 @@ public class KafkaRaftClientTest {
         KafkaRaftClient client = buildClient(voters);
 
         assertEquals(ElectionState.withElectedLeader(epoch, otherNodeId, voters), quorumStateStore.readElectionState());
-        assertEquals(3L, log.endOffset());
+        assertEquals(3L, log.endOffset().offset);
 
         initializeVoterConnections(client, voters, epoch, OptionalInt.of(otherNodeId));
 
@@ -1552,7 +1552,7 @@ public class KafkaRaftClientTest {
 
         // Poll again to complete truncation
         client.poll();
-        assertEquals(2L, log.endOffset());
+        assertEquals(new LogOffsetMetadata(2L), log.endOffset());
 
         // Now we should be fetching
         client.poll();

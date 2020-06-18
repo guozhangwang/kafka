@@ -21,6 +21,7 @@ import org.slf4j.Logger;
 
 import java.io.IOException;
 import java.util.HashSet;
+import java.util.Optional;
 import java.util.OptionalInt;
 import java.util.OptionalLong;
 import java.util.Set;
@@ -110,7 +111,7 @@ public class QuorumState {
         return leaderId().orElse(-1);
     }
 
-    public OptionalLong highWatermark() {
+    public Optional<LogOffsetMetadata> highWatermark() {
         return state.highWatermark();
     }
 
