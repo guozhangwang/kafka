@@ -365,7 +365,7 @@ class Log(@volatile private var _dir: File,
       updateHighWatermarkMetadata(LogOffsetMetadata(logStartOffset))
       logStartOffset
     } else if (hw.messageOffset > logEndOffset) {
-      updateHighWatermarkMetadata(LogOffsetMetadata(logEndOffset))
+      updateHighWatermarkMetadata(logEndOffsetMetadata)
       logEndOffset
     } else {
       updateHighWatermarkMetadata(hw)

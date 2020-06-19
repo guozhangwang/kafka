@@ -16,30 +16,29 @@
  */
 package org.apache.kafka.raft;
 
+import java.util.Optional;
+
 /**
  * Metadata for specific local log offset
  */
 public class LogOffsetMetadata {
 
     public final long offset;
-    public final long segmentBaseOffset;
-    public final int relativePositionInSegment;
+    public final Optional<OffsetMetadata> metadata;
 
     public LogOffsetMetadata(long offset) {
-        this(offset, -1L, -1);
+        this(offset, Optional.empty());
     }
 
-    public LogOffsetMetadata(long offset, long segmentBaseOffset, int relativePositionInSegment) {
+    public LogOffsetMetadata(long offset, Optional<OffsetMetadata> metadata) {
         this.offset = offset;
-        this.segmentBaseOffset = segmentBaseOffset;
-        this.relativePositionInSegment = relativePositionInSegment;
+        this.metadata = metadata;
     }
 
     @Override
     public String toString() {
         return "LogOffsetMetadata(offset=" + offset +
-                ", segmentBaseOffset=" + segmentBaseOffset +
-                ", relativePositionInSegment=" + relativePositionInSegment + ")";
+                ", metadata=" + metadata + ")";
     }
 
     @Override
@@ -47,8 +46,7 @@ public class LogOffsetMetadata {
         if (obj instanceof LogOffsetMetadata) {
             LogOffsetMetadata other = (LogOffsetMetadata) obj;
             return this.offset == other.offset &&
-                   this.segmentBaseOffset == other.segmentBaseOffset &&
-                   this.relativePositionInSegment == other.relativePositionInSegment;
+                   this.metadata.equals(other.metadata);
         } else {
             return false;
         }
