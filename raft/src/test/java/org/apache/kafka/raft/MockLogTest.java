@@ -262,7 +262,7 @@ public class MockLogTest {
     }
 
     private Optional<OffsetRange> readOffsets(long startOffset, OptionalLong maxOffset) {
-        Records records = log.read(startOffset, maxOffset);
+        Records records = log.read(startOffset, maxOffset).records;
         long firstReadOffset = -1L;
         long lastReadOffset = -1L;
         for (Record record : records.records()) {
