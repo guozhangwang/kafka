@@ -222,6 +222,8 @@ public class KafkaRaftClient implements RaftClient {
             while (stateMachine.position().offset < highWatermark.offset && shutdown.get() == null) {
                 OffsetAndEpoch position = stateMachine.position();
                 Records records = readCommitted(position, highWatermark.offset);
+                if (records.sizeInBytes() == 0)
+                    break;
 
                 stateMachine.apply(records);
                 logger.trace("Applied committed records at {} to the state machine; position " +
