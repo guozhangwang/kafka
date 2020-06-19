@@ -16,6 +16,7 @@
  */
 package org.apache.kafka.raft;
 
+import java.util.Objects;
 import java.util.Optional;
 
 /**
@@ -50,5 +51,10 @@ public class LogOffsetMetadata {
         } else {
             return false;
         }
+    }
+
+    @Override
+    public int hashCode() {
+        return Objects.hash(offset, metadata);
     }
 }
