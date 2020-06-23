@@ -16,6 +16,6 @@
  */
 package org.apache.kafka.raft;
 
-// Opaque metadata type which should be instantiate by the log implementation
+// Opaque metadata type which should be instantiated by the log implementation
 public interface OffsetMetadata {
 }

@@ -16,7 +16,7 @@
  */
 package kafka.raft
 
-import java.util.{Objects, Optional, OptionalLong}
+import java.util.{Optional, OptionalLong}
 
 import kafka.log.{AppendOrigin, Log}
 import kafka.server.{FetchHighWatermark, FetchLogEnd}
@@ -24,20 +24,11 @@ import org.apache.kafka.common.KafkaException
 import org.apache.kafka.common.record.{MemoryRecords, Records}
 import org.apache.kafka.common.utils.Time
 import org.apache.kafka.raft
-import org.apache.kafka.raft.{LogAppendInfo, LogFetchInfo, LogOffsetMetadata, OffsetMetadata, ReplicatedLog}
+import org.apache.kafka.raft.{LogAppendInfo, LogFetchInfo, LogOffsetMetadata, ReplicatedLog}
 
 import scala.compat.java8.OptionConverters._
 
 class KafkaMetadataLog(time: Time, log: Log, maxFetchSizeInBytes: Int = 1024 * 1024) extends ReplicatedLog {
-
-  case class KafkaLogOffsetMetadata(segmentBaseOffset: Long, relativePositionInSegment: Int) extends OffsetMetadata {
-    override def hashCode: Int = Objects.hash(segmentBaseOffset, relativePositionInSegment)
-    override def equals(obj: Any): Boolean = obj match {
-      case other: KafkaLogOffsetMetadata => segmentBaseOffset == other.segmentBaseOffset && relativePositionInSegment == other.relativePositionInSegment
-      case _ => false
-    }
-    override def toString: String = s"(segmentBaseOffset=$segmentBaseOffset,relativePositionInSegment=$relativePositionInSegment)"
-  }
 
   override def read(startOffset: Long, endOffsetExclusive: OptionalLong): LogFetchInfo = {
     val isolation = if (endOffsetExclusive.isPresent)
@@ -55,7 +46,7 @@ class KafkaMetadataLog(time: Time, log: Log, maxFetchSizeInBytes: Int = 1024 * 1
 
       new LogOffsetMetadata(
         fetchInfo.fetchOffsetMetadata.messageOffset,
-        Optional.of(KafkaLogOffsetMetadata(
+        Optional.of(SegmentPosition(
           fetchInfo.fetchOffsetMetadata.segmentBaseOffset,
           fetchInfo.fetchOffsetMetadata.relativePositionInSegment))
         )
@@ -100,7 +91,7 @@ class KafkaMetadataLog(time: Time, log: Log, maxFetchSizeInBytes: Int = 1024 * 1
     val endOffsetMetadata = log.logEndOffsetMetadata
     new LogOffsetMetadata(
       endOffsetMetadata.messageOffset,
-      Optional.of(KafkaLogOffsetMetadata(
+      Optional.of(SegmentPosition(
         endOffsetMetadata.segmentBaseOffset,
         endOffsetMetadata.relativePositionInSegment))
       )
@@ -119,15 +110,14 @@ class KafkaMetadataLog(time: Time, log: Log, maxFetchSizeInBytes: Int = 1024 * 1
   }
 
   override def updateHighWatermark(offsetMetadata: LogOffsetMetadata): Unit = {
-    if (offsetMetadata.metadata.isPresent && offsetMetadata.metadata.get.isInstanceOf[KafkaLogOffsetMetadata]) {
-      val logOffsetMetadata = offsetMetadata.metadata.get.asInstanceOf[KafkaLogOffsetMetadata]
-      log.updateHighWatermarkOffsetMetadata(new kafka.server.LogOffsetMetadata(
-        offsetMetadata.offset,
-        logOffsetMetadata.segmentBaseOffset,
-        logOffsetMetadata.relativePositionInSegment)
+    offsetMetadata.metadata.asScala match {
+      case Some(segmentPosition: SegmentPosition) => log.updateHighWatermarkOffsetMetadata(
+        new kafka.server.LogOffsetMetadata(
+          offsetMetadata.offset,
+          segmentPosition.segmentBaseOffset,
+          segmentPosition.relativePositionInSegment)
       )
-    } else {
-      log.updateHighWatermark(offsetMetadata.offset)
+      case _ => log.updateHighWatermark(offsetMetadata.offset)
     }
   }
 }

@@ -1603,7 +1603,7 @@ public class KafkaRaftClientTest {
 
         // Poll again to complete truncation
         client.poll();
-        assertEquals(new LogOffsetMetadata(2L), log.endOffset());
+        assertEquals(2L, log.endOffset().offset);
 
         // Now we should be fetching
         client.poll();

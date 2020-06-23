@@ -818,7 +818,7 @@ public class RaftEventSimulationTest {
             cluster.leaderHighWatermark().ifPresent(highWatermark -> {
                 long numReachedHighWatermark = cluster.nodes.entrySet().stream()
                     .filter(entry -> cluster.voters.contains(entry.getKey()))
-                    .filter(entry -> entry.getValue().log.endOffset() >= highWatermark)
+                    .filter(entry -> entry.getValue().log.endOffset().offset >= highWatermark)
                     .count();
                 assertTrue("Insufficient nodes have reached current high watermark",
                     numReachedHighWatermark >= cluster.majoritySize());

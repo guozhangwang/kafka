@@ -30,10 +30,13 @@ import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.OptionalLong;
+import java.util.UUID;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Function;
 import java.util.stream.Collectors;
@@ -42,10 +45,11 @@ public class MockLog implements ReplicatedLog {
     private final List<EpochStartOffset> epochStartOffsets = new ArrayList<>();
     private final List<LogBatch> log = new ArrayList<>();
     private LogOffsetMetadata highWatermark = new LogOffsetMetadata(0L);
+    private final Map<Long, UUID> offsetMetadataMap = new HashMap<>();
 
     @Override
     public void truncateTo(long offset) {
-        if (offset < highWatermark) {
+        if (offset < highWatermark.offset) {
             throw new IllegalArgumentException("Illegal attempt to truncate to offset " + offset +
                 " which is below the current high watermark " + highWatermark);
         }
@@ -59,6 +63,16 @@ public class MockLog implements ReplicatedLog {
         if (this.highWatermark.offset > offsetMetadata.offset)
             throw new IllegalArgumentException("Non-monotonic update of current high watermark " +
                 highWatermark + " to new value " + offsetMetadata);
+
+        if (offsetMetadata.metadata.isPresent()) {
+            UUID id = ((MockOffsetMetadata) offsetMetadata.metadata.get()).id;
+
+            if (id != null && !id.equals(offsetMetadataMap.get(offsetMetadata.offset)))
+                throw new IllegalArgumentException("High watermark " + offsetMetadata.offset +
+                        " metadata uuid " + offsetMetadata.metadata.get() + " does not match the maintained uuid " +
+                        offsetMetadataMap.get(offsetMetadata.offset));
+        }
+
         this.highWatermark = offsetMetadata;
     }
 
@@ -106,7 +120,9 @@ public class MockLog implements ReplicatedLog {
 
     @Override
     public LogOffsetMetadata endOffset() {
-        return new LogOffsetMetadata(lastEntry().map(entry -> entry.offset + 1).orElse(0L));
+        Long nextOffset = lastEntry().map(entry -> entry.offset + 1).orElse(0L);
+        offsetMetadataMap.putIfAbsent(nextOffset, UUID.randomUUID());
+        return new LogOffsetMetadata(nextOffset, Optional.of(new MockOffsetMetadata(offsetMetadataMap.get(nextOffset))));
     }
 
     @Override
@@ -119,9 +135,15 @@ public class MockLog implements ReplicatedLog {
         List<LogEntry> entries = new ArrayList<>();
         for (Record record : batch) {
             long offset = offsetSupplier.apply(record);
-            entries.add(new LogEntry(offset, new SimpleRecord(record)));
+            entries.add(buildEntry(offset, new SimpleRecord(record)));
         }
         return entries;
+    }
+
+    private LogEntry buildEntry(Long offset, SimpleRecord record) {
+        offsetMetadataMap.putIfAbsent(offset, UUID.randomUUID());
+
+        return new LogEntry(offset, record);
     }
 
     @Override
@@ -144,7 +166,7 @@ public class MockLog implements ReplicatedLog {
 
         List<LogEntry> entries = new ArrayList<>();
         for (SimpleRecord record : records) {
-            entries.add(new LogEntry(offset, record));
+            entries.add(buildEntry(offset, record));
             offset += 1;
         }
         appendBatch(new LogBatch(epoch, false, entries));
@@ -208,7 +230,10 @@ public class MockLog implements ReplicatedLog {
         buffer.flip();
         Records records = MemoryRecords.readableRecords(buffer);
 
-        return new LogFetchInfo(records, new LogOffsetMetadata(startOffset));
+        offsetMetadataMap.putIfAbsent(startOffset, UUID.randomUUID());
+
+        return new LogFetchInfo(records,
+                new LogOffsetMetadata(startOffset, Optional.of(new MockOffsetMetadata(offsetMetadataMap.get(startOffset)))));
     }
 
     @Override
@@ -217,6 +242,19 @@ public class MockLog implements ReplicatedLog {
             throw new IllegalArgumentException(
                 "Can only assign epoch for the end offset " + endOffset().offset + ", but get offset " + startOffset);
         epochStartOffsets.add(new EpochStartOffset(epoch, startOffset));
+    }
+
+    static class MockOffsetMetadata implements OffsetMetadata {
+        final UUID id;
+
+        MockOffsetMetadata(UUID id) {
+            this.id = id;
+        }
+
+        @Override
+        public String toString() {
+            return id.toString();
+        }
     }
 
     static class LogEntry {
