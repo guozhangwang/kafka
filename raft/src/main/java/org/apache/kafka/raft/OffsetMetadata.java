@@ -16,21 +16,6 @@
  */
 package org.apache.kafka.raft;
 
-public class MockQuorumStateStore implements QuorumStateStore {
-    private ElectionState current;
-
-    @Override
-    public ElectionState readElectionState() {
-        return current;
-    }
-
-    @Override
-    public void writeElectionState(ElectionState update) {
-        this.current = update;
-    }
-
-    @Override
-    public void clear() {
-        current = null;
-    }
+// Opaque metadata type which should be instantiated by the log implementation
+public interface OffsetMetadata {
 }

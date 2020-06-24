@@ -14,23 +14,10 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.apache.kafka.raft;
+package kafka.raft
 
-public class MockQuorumStateStore implements QuorumStateStore {
-    private ElectionState current;
+import org.apache.kafka.raft.OffsetMetadata
 
-    @Override
-    public ElectionState readElectionState() {
-        return current;
-    }
-
-    @Override
-    public void writeElectionState(ElectionState update) {
-        this.current = update;
-    }
-
-    @Override
-    public void clear() {
-        current = null;
-    }
+case class SegmentPosition(baseOffset: Long, relativePosition: Int) extends OffsetMetadata {
+  override def toString: String = s"(segmentBaseOffset=$baseOffset,relativePositionInSegment=$relativePosition)"
 }

@@ -24,13 +24,13 @@ import org.apache.kafka.common.KafkaException
 import org.apache.kafka.common.record.{MemoryRecords, Records}
 import org.apache.kafka.common.utils.Time
 import org.apache.kafka.raft
-import org.apache.kafka.raft.{LogAppendInfo, ReplicatedLog}
+import org.apache.kafka.raft.{LogAppendInfo, LogFetchInfo, LogOffsetMetadata, ReplicatedLog}
 
 import scala.compat.java8.OptionConverters._
 
 class KafkaMetadataLog(time: Time, log: Log, maxFetchSizeInBytes: Int = 1024 * 1024) extends ReplicatedLog {
 
-  override def read(startOffset: Long, endOffsetExclusive: OptionalLong): Records = {
+  override def read(startOffset: Long, endOffsetExclusive: OptionalLong): LogFetchInfo = {
     val isolation = if (endOffsetExclusive.isPresent)
       FetchHighWatermark
     else
@@ -40,10 +40,23 @@ class KafkaMetadataLog(time: Time, log: Log, maxFetchSizeInBytes: Int = 1024 * 1
       maxLength = maxFetchSizeInBytes,
       isolation = isolation,
       minOneMessage = true)
-    fetchInfo.records
+
+    new LogFetchInfo(
+      fetchInfo.records,
+
+      new LogOffsetMetadata(
+        fetchInfo.fetchOffsetMetadata.messageOffset,
+        Optional.of(SegmentPosition(
+          fetchInfo.fetchOffsetMetadata.segmentBaseOffset,
+          fetchInfo.fetchOffsetMetadata.relativePositionInSegment))
+        )
+    )
   }
 
   override def appendAsLeader(records: Records, epoch: Int): LogAppendInfo = {
+    if (records.sizeInBytes == 0)
+      throw new IllegalArgumentException("Attempt to append an empty record set")
+
     val appendInfo = log.appendAsLeader(records.asInstanceOf[MemoryRecords],
       leaderEpoch = epoch,
       origin = AppendOrigin.Coordinator)
@@ -53,6 +66,9 @@ class KafkaMetadataLog(time: Time, log: Log, maxFetchSizeInBytes: Int = 1024 * 1
   }
 
   override def appendAsFollower(records: Records): LogAppendInfo = {
+    if (records.sizeInBytes == 0)
+      throw new IllegalArgumentException("Attempt to append an empty record set")
+
     val appendInfo = log.appendAsFollower(records.asInstanceOf[MemoryRecords])
     new LogAppendInfo(appendInfo.firstOffset.getOrElse {
       throw new KafkaException("Append failed unexpectedly")
@@ -71,8 +87,14 @@ class KafkaMetadataLog(time: Time, log: Log, maxFetchSizeInBytes: Int = 1024 * 1
     endOffsetOpt.asJava
   }
 
-  override def endOffset: Long = {
-    log.logEndOffset
+  override def endOffset: LogOffsetMetadata = {
+    val endOffsetMetadata = log.logEndOffsetMetadata
+    new LogOffsetMetadata(
+      endOffsetMetadata.messageOffset,
+      Optional.of(SegmentPosition(
+        endOffsetMetadata.segmentBaseOffset,
+        endOffsetMetadata.relativePositionInSegment))
+      )
   }
 
   override def startOffset: Long = {
@@ -87,8 +109,15 @@ class KafkaMetadataLog(time: Time, log: Log, maxFetchSizeInBytes: Int = 1024 * 1
     log.maybeAssignEpochStartOffset(epoch, startOffset)
   }
 
-  override def updateHighWatermark(offset: Long): Unit = {
-    log.updateHighWatermark(offset)
+  override def updateHighWatermark(offsetMetadata: LogOffsetMetadata): Unit = {
+    offsetMetadata.metadata.asScala match {
+      case Some(segmentPosition: SegmentPosition) => log.updateHighWatermarkOffsetMetadata(
+        new kafka.server.LogOffsetMetadata(
+          offsetMetadata.offset,
+          segmentPosition.baseOffset,
+          segmentPosition.relativePosition)
+      )
+      case _ => log.updateHighWatermark(offsetMetadata.offset)
+    }
   }
-
 }

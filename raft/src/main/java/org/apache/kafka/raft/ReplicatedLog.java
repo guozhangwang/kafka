@@ -29,6 +29,7 @@ public interface ReplicatedLog {
      * exception.
      *
      * @return the metadata information of the appended batch
+     * @throws IllegalArgumentException if the record set is empty
      */
     LogAppendInfo appendAsLeader(Records records, int epoch);
 
@@ -38,13 +39,14 @@ public interface ReplicatedLog {
      * or do additional validation.
      *
      * @return the metadata information of the appended batch
+     * @throws IllegalArgumentException if the record set is empty
      */
     LogAppendInfo appendAsFollower(Records records);
 
     /**
      * Read a set of records within a range of offsets.
      */
-    Records read(long startOffsetInclusive, OptionalLong endOffsetExclusive);
+    LogFetchInfo read(long startOffsetInclusive, OptionalLong endOffsetExclusive);
 
     /**
      * Return the latest epoch. For an empty log, the latest epoch is defined
@@ -62,10 +64,10 @@ public interface ReplicatedLog {
     Optional<OffsetAndEpoch> endOffsetForEpoch(int leaderEpoch);
 
     /**
-     * Get the current log end offset. This is always one plus the offset of the last
+     * Get the current log end offset metadata. This is always one plus the offset of the last
      * written record. When the log is empty, the end offset is equal to the start offset.
      */
-    long endOffset();
+    LogOffsetMetadata endOffset();
 
     /**
      * Get the current log start offset. This is the offset of the first written
@@ -86,7 +88,7 @@ public interface ReplicatedLog {
      */
     void truncateTo(long offset);
 
-    void updateHighWatermark(long offset);
+    void updateHighWatermark(LogOffsetMetadata offsetMetadata);
 
     /**
      * Truncate to an offset and epoch.
@@ -106,7 +108,7 @@ public interface ReplicatedLog {
                 if (localEndOffset.epoch == leaderEpoch) {
                     truncationOffset = Math.min(localEndOffset.offset, endOffset.offset);
                 } else {
-                    truncationOffset = Math.min(localEndOffset.offset, endOffset());
+                    truncationOffset = Math.min(localEndOffset.offset, endOffset().offset);
                 }
             } else {
                 // The leader has no epoch which is less than or equal to our own epoch. We simply truncate

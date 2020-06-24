@@ -140,7 +140,7 @@ public class KafkaRaftClientTest {
         KafkaRaftClient client = buildClient(voters, stateMachine);
         assertTrue(stateMachine.isLeader());
         assertEquals(epoch, stateMachine.epoch());
-        assertEquals(1L, log.endOffset());
+        assertEquals(1L, log.endOffset().offset);
 
         // Should have sent out connection info query for other node id.
         client.poll();
@@ -156,7 +156,7 @@ public class KafkaRaftClientTest {
 
         KafkaRaftClient client = buildClient(voters);
         assertFalse(stateMachine.isLeader());
-        assertEquals(0L, log.endOffset());
+        assertEquals(0L, log.endOffset().offset);
 
         initializeVoterConnections(client, voters, 1, OptionalInt.empty());
 
@@ -192,13 +192,13 @@ public class KafkaRaftClientTest {
         assertEquals(ElectionState.withElectedLeader(1, localId, voters), quorumStateStore.readElectionState());
 
         // Leader change record appended
-        assertEquals(1, log.endOffset());
+        assertEquals(1, log.endOffset().offset);
 
         // Send BeginQuorumEpoch to voters
         client.poll();
         assertBeginQuorumEpochRequest(1);
 
-        Records records = log.read(0, OptionalLong.of(1));
+        Records records = log.read(0, OptionalLong.of(1)).records;
         RecordBatch batch = records.batches().iterator().next();
         assertTrue(batch.isControlBatch());
 
@@ -598,18 +598,11 @@ public class KafkaRaftClientTest {
         assertEquals(OptionalLong.of(1L), client.highWatermark());
         assertEquals(new OffsetAndEpoch(1, epoch), stateMachine.position());
 
-        // Let the follower to send another fetch from offset 2
-        deliverRequest(fetchQuorumRecordsRequest(epoch, otherNodeId, 2L, epoch, 500));
-        pollUntilSend(client);
-        assertEquals(OptionalLong.of(2L), client.highWatermark());
-        assertEquals(new OffsetAndEpoch(2, epoch), stateMachine.position());
-
-        // Let the follower to send another fetch from offset 4, only then the append future can be satisified
+        // Let the follower to send another fetch from offset 4
         deliverRequest(fetchQuorumRecordsRequest(epoch, otherNodeId, 4L, epoch, 500));
         client.poll();
         assertEquals(OptionalLong.of(4L), client.highWatermark());
         assertEquals(new OffsetAndEpoch(4, epoch), stateMachine.position());
-
     }
 
     @Test
@@ -1062,7 +1055,7 @@ public class KafkaRaftClientTest {
             fetchRecordsResponse(epoch, otherNodeId, records, 0L, Errors.NONE));
 
         client.poll();
-        assertEquals(0, log.endOffset());
+        assertEquals(0, log.endOffset().offset);
         assertEquals(ElectionState.withVotedCandidate(epoch + 1, localId, voters), quorumStateStore.readElectionState());
     }
 
@@ -1097,7 +1090,7 @@ public class KafkaRaftClientTest {
         deliverResponse(fetchCorrelationId, voter2, response);
 
         client.poll();
-        assertEquals(0, log.endOffset());
+        assertEquals(0, log.endOffset().offset);
         assertEquals(ElectionState.withElectedLeader(epoch + 1, voter3, voters), quorumStateStore.readElectionState());
     }
 
@@ -1405,7 +1398,65 @@ public class KafkaRaftClientTest {
         deliverResponse(fetchQuorumCorrelationId, otherNodeId, response);
 
         client.poll();
-        assertEquals(2L, log.endOffset());
+        assertEquals(2L, log.endOffset().offset);
+    }
+
+    @Test
+    public void testEmptyRecordSetInFetchResponse() throws Exception {
+        int otherNodeId = 1;
+        int epoch = 5;
+        Set<Integer> voters = Utils.mkSet(localId, otherNodeId);
+        quorumStateStore.writeElectionState(ElectionState.withElectedLeader(epoch, otherNodeId, voters));
+        KafkaRaftClient client = buildClient(voters, stateMachine);
+
+        assertEquals(ElectionState.withElectedLeader(epoch, otherNodeId, voters), quorumStateStore.readElectionState());
+        assertTrue(stateMachine.isFollower());
+        assertEquals(epoch, stateMachine.epoch());
+
+        initializeVoterConnections(client, voters, epoch, OptionalInt.of(otherNodeId));
+
+        // Receive an empty fetch response
+        pollUntilSend(client);
+        int fetchQuorumCorrelationId = assertSentFetchQuorumRecordsRequest(epoch, 0L, 0);
+        FetchQuorumRecordsResponseData fetchResponse = fetchRecordsResponse(epoch, otherNodeId,
+            MemoryRecords.EMPTY, 0L, Errors.NONE);
+        deliverResponse(fetchQuorumCorrelationId, otherNodeId, fetchResponse);
+        client.poll();
+        assertEquals(0L, log.endOffset().offset);
+        assertEquals(OptionalLong.of(0L), client.highWatermark());
+
+        // Receive some records in the next poll, but do not advance high watermark
+        pollUntilSend(client);
+        Records records = MemoryRecords.withRecords(0L, CompressionType.NONE,
+            epoch, new SimpleRecord("a".getBytes()), new SimpleRecord("b".getBytes()));
+        fetchQuorumCorrelationId = assertSentFetchQuorumRecordsRequest(epoch, 0L, 0);
+        fetchResponse = fetchRecordsResponse(epoch, otherNodeId,
+            records, 0L, Errors.NONE);
+        deliverResponse(fetchQuorumCorrelationId, otherNodeId, fetchResponse);
+        client.poll();
+        assertEquals(2L, log.endOffset().offset);
+        assertEquals(OptionalLong.of(0L), client.highWatermark());
+
+        // The next fetch response is empty, but should still advance the high watermark
+        pollUntilSend(client);
+        fetchQuorumCorrelationId = assertSentFetchQuorumRecordsRequest(epoch, 2L, epoch);
+        fetchResponse = fetchRecordsResponse(epoch, otherNodeId,
+            MemoryRecords.EMPTY, 2L, Errors.NONE);
+        deliverResponse(fetchQuorumCorrelationId, otherNodeId, fetchResponse);
+        client.poll();
+        assertEquals(2L, log.endOffset().offset);
+        assertEquals(OptionalLong.of(2L), client.highWatermark());
+    }
+
+    @Test
+    public void testAppendEmptyRecordSetNotAllowed() throws Exception {
+        int epoch = 5;
+
+        Set<Integer> voters = Collections.singleton(localId);
+        quorumStateStore.writeElectionState(ElectionState.withElectedLeader(epoch, localId, voters));
+
+        buildClient(voters, stateMachine);
+        assertThrows(IllegalArgumentException.class, () -> stateMachine.append(MemoryRecords.EMPTY));
     }
 
     @Test
@@ -1538,7 +1589,7 @@ public class KafkaRaftClientTest {
         KafkaRaftClient client = buildClient(voters);
 
         assertEquals(ElectionState.withElectedLeader(epoch, otherNodeId, voters), quorumStateStore.readElectionState());
-        assertEquals(3L, log.endOffset());
+        assertEquals(3L, log.endOffset().offset);
 
         initializeVoterConnections(client, voters, epoch, OptionalInt.of(otherNodeId));
 
@@ -1552,7 +1603,7 @@ public class KafkaRaftClientTest {
 
         // Poll again to complete truncation
         client.poll();
-        assertEquals(2L, log.endOffset());
+        assertEquals(2L, log.endOffset().offset);
 
         // Now we should be fetching
         client.poll();

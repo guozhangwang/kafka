@@ -16,21 +16,18 @@
  */
 package org.apache.kafka.raft;
 
-public class MockQuorumStateStore implements QuorumStateStore {
-    private ElectionState current;
+import org.apache.kafka.common.record.Records;
 
-    @Override
-    public ElectionState readElectionState() {
-        return current;
-    }
+/**
+ * Metadata for the records fetched from log, including the records itself
+ */
+public class LogFetchInfo {
 
-    @Override
-    public void writeElectionState(ElectionState update) {
-        this.current = update;
-    }
+    public final Records records;
+    public final LogOffsetMetadata startOffsetMetadata;
 
-    @Override
-    public void clear() {
-        current = null;
+    public LogFetchInfo(Records records, LogOffsetMetadata startOffsetMetadata) {
+        this.records = records;
+        this.startOffsetMetadata = startOffsetMetadata;
     }
 }

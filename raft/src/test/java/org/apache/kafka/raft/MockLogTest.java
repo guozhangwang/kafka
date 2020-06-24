@@ -33,6 +33,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.OptionalLong;
 
@@ -56,9 +57,9 @@ public class MockLogTest {
         log.appendAsLeader(Collections.singleton(recordOne), epoch);
         assertEquals(epoch, log.lastFetchedEpoch());
         assertEquals(0L, log.startOffset());
-        assertEquals(1L, log.endOffset());
+        assertEquals(1L, log.endOffset().offset);
 
-        Records records = log.read(0, OptionalLong.of(1));
+        Records records = log.read(0, OptionalLong.of(1)).records;
         List<? extends RecordBatch> batches = Utils.toList(records.batches().iterator());
 
         RecordBatch batch = batches.get(0);
@@ -74,9 +75,9 @@ public class MockLogTest {
         SimpleRecord recordThree = new SimpleRecord("three".getBytes());
         log.appendAsLeader(Arrays.asList(recordTwo, recordThree), epoch);
         assertEquals(0L, log.startOffset());
-        assertEquals(3L, log.endOffset());
+        assertEquals(3L, log.endOffset().offset);
 
-        records = log.read(0, OptionalLong.empty());
+        records = log.read(0, OptionalLong.empty()).records;
         batches = Utils.toList(records.batches().iterator());
         assertEquals(2, batches.size());
 
@@ -103,28 +104,29 @@ public class MockLogTest {
         log.appendAsLeader(Collections.singleton(recordThree), epoch);
 
         assertEquals(0L, log.startOffset());
-        assertEquals(3L, log.endOffset());
+        assertEquals(3L, log.endOffset().offset);
 
         log.truncateTo(2);
         assertEquals(0L, log.startOffset());
-        assertEquals(2L, log.endOffset());
+        assertEquals(2L, log.endOffset().offset);
 
         log.truncateTo(1);
         assertEquals(0L, log.startOffset());
-        assertEquals(0L, log.endOffset());
+        assertEquals(0L, log.endOffset().offset);
     }
 
     @Test
     public void testUpdateHighWatermark() {
-        long newOffset = 5L;
+        LogOffsetMetadata newOffset = new LogOffsetMetadata(5L);
         log.updateHighWatermark(newOffset);
         assertEquals(newOffset, log.highWatermark());
     }
 
     @Test
     public void testDecrementHighWatermark() {
-        log.updateHighWatermark(4);
-        assertThrows(IllegalArgumentException.class, () -> log.updateHighWatermark(3));
+        LogOffsetMetadata newOffset = new LogOffsetMetadata(4L);
+        log.updateHighWatermark(newOffset);
+        assertThrows(IllegalArgumentException.class, () -> log.updateHighWatermark(new LogOffsetMetadata(3L)));
     }
 
     @Test
@@ -147,10 +149,10 @@ public class MockLogTest {
         log.appendAsLeader(MemoryRecords.withRecords(initialOffset, CompressionType.NONE, recordFoo), currentEpoch);
 
         assertEquals(0, log.startOffset());
-        assertEquals(1, log.endOffset());
+        assertEquals(1, log.endOffset().offset);
         assertEquals(currentEpoch, log.lastFetchedEpoch());
 
-        Records records = log.read(0, OptionalLong.empty());
+        Records records = log.read(0, OptionalLong.empty()).records;
         List<ByteBuffer> extractRecords = new ArrayList<>();
         for (Record record : records.records()) {
             extractRecords.add(record.value());
@@ -170,10 +172,10 @@ public class MockLogTest {
             initialOffset, 2, messageData), currentEpoch);
 
         assertEquals(0, log.startOffset());
-        assertEquals(1, log.endOffset());
+        assertEquals(1, log.endOffset().offset);
         assertEquals(currentEpoch, log.lastFetchedEpoch());
 
-        Records records = log.read(0, OptionalLong.empty());
+        Records records = log.read(0, OptionalLong.empty()).records;
         for (RecordBatch batch : records.batches()) {
             assertTrue(batch.isControlBatch());
         }
@@ -196,10 +198,10 @@ public class MockLogTest {
         log.appendAsFollower(MemoryRecords.withRecords(initialOffset, CompressionType.NONE, epoch, recordFoo));
 
         assertEquals(5L, log.startOffset());
-        assertEquals(6L, log.endOffset());
+        assertEquals(6L, log.endOffset().offset);
         assertEquals(3, log.lastFetchedEpoch());
 
-        Records records = log.read(0, OptionalLong.empty());
+        Records records = log.read(0, OptionalLong.empty()).records;
         List<ByteBuffer> extractRecords = new ArrayList<>();
         for (Record record : records.records()) {
             extractRecords.add(record.value());
@@ -208,7 +210,7 @@ public class MockLogTest {
         assertEquals(1, extractRecords.size());
         assertEquals(recordFoo.value(), extractRecords.get(0));
         assertEquals(Optional.of(new OffsetAndEpoch(5, 0)), log.endOffsetForEpoch(0));
-        assertEquals(Optional.of(new OffsetAndEpoch(log.endOffset(), epoch)), log.endOffsetForEpoch(epoch));
+        assertEquals(Optional.of(new OffsetAndEpoch(log.endOffset().offset, epoch)), log.endOffsetForEpoch(epoch));
     }
 
     @Test
@@ -225,12 +227,92 @@ public class MockLogTest {
 
         log.appendAsLeader(Arrays.asList(recordOne, recordTwo), epoch);
 
-        Records records = log.read(0, OptionalLong.empty());
+        Records records = log.read(0, OptionalLong.empty()).records;
 
         List<ByteBuffer> extractRecords = new ArrayList<>();
         for (Record record : records.records()) {
             extractRecords.add(record.value());
         }
         assertEquals(Arrays.asList(recordOne.value(), recordTwo.value()), extractRecords);
+    }
+
+    @Test
+    public void testReadCompleteBatches() {
+        appendBatch(20, 1);
+        appendBatch(10, 1);
+        appendBatch(30, 1);
+
+        assertEquals(Optional.empty(), readOffsets(0L, OptionalLong.of(15L)));
+        assertEquals(Optional.of(new OffsetRange(0L, 19L)), readOffsets(0L, OptionalLong.of(20L)));
+        assertEquals(Optional.of(new OffsetRange(0L, 19L)), readOffsets(10L, OptionalLong.of(20L)));
+        assertEquals(Optional.of(new OffsetRange(0L, 19L)), readOffsets(10L, OptionalLong.of(25L)));
+
+        assertEquals(Optional.empty(), readOffsets(25L, OptionalLong.of(27L)));
+        assertEquals(Optional.of(new OffsetRange(0L, 29L)), readOffsets(0L, OptionalLong.of(30L)));
+        assertEquals(Optional.of(new OffsetRange(0L, 29L)), readOffsets(10L, OptionalLong.of(30L)));
+        assertEquals(Optional.of(new OffsetRange(0L, 29L)), readOffsets(10L, OptionalLong.of(35L)));
+        assertEquals(Optional.of(new OffsetRange(20L, 29L)), readOffsets(20L, OptionalLong.of(30L)));
+        assertEquals(Optional.of(new OffsetRange(20L, 29L)), readOffsets(20L, OptionalLong.of(35L)));
+
+        assertEquals(Optional.of(new OffsetRange(0L, 59L)), readOffsets(10L, OptionalLong.of(60L)));
+        assertEquals(Optional.of(new OffsetRange(20L, 59L)), readOffsets(20L, OptionalLong.of(60L)));
+        assertEquals(Optional.of(new OffsetRange(20L, 59L)), readOffsets(25L, OptionalLong.of(60L)));
+        assertEquals(Optional.of(new OffsetRange(30L, 59L)), readOffsets(30L, OptionalLong.of(60L)));
+        assertEquals(Optional.of(new OffsetRange(30L, 59L)), readOffsets(35L, OptionalLong.of(60L)));
+    }
+
+    @Test
+    public void testEmptyAppendNotAllowed() {
+        assertThrows(IllegalArgumentException.class, () -> log.appendAsFollower(MemoryRecords.EMPTY));
+        assertThrows(IllegalArgumentException.class, () -> log.appendAsLeader(MemoryRecords.EMPTY, 1));
+    }
+
+    private Optional<OffsetRange> readOffsets(long startOffset, OptionalLong maxOffset) {
+        Records records = log.read(startOffset, maxOffset).records;
+        long firstReadOffset = -1L;
+        long lastReadOffset = -1L;
+        for (Record record : records.records()) {
+            if (firstReadOffset < 0)
+                firstReadOffset = record.offset();
+            if (record.offset() > lastReadOffset)
+                lastReadOffset = record.offset();
+        }
+        if (firstReadOffset < 0) {
+            return Optional.empty();
+        } else {
+            return Optional.of(new OffsetRange(firstReadOffset, lastReadOffset));
+        }
+    }
+
+    private static class OffsetRange {
+        public final long startOffset;
+        public final long endOffset;
+
+        private OffsetRange(long startOffset, long endOffset) {
+            this.startOffset = startOffset;
+            this.endOffset = endOffset;
+        }
+
+        @Override
+        public boolean equals(Object o) {
+            if (this == o) return true;
+            if (o == null || getClass() != o.getClass()) return false;
+            OffsetRange that = (OffsetRange) o;
+            return startOffset == that.startOffset &&
+                endOffset == that.endOffset;
+        }
+
+        @Override
+        public int hashCode() {
+            return Objects.hash(startOffset, endOffset);
+        }
+    }
+
+    private void appendBatch(int numRecords, int epoch) {
+        List<SimpleRecord> records = new ArrayList<>(numRecords);
+        for (int i = 0; i < numRecords; i++) {
+            records.add(new SimpleRecord(String.valueOf(i).getBytes()));
+        }
+        log.appendAsLeader(records, epoch);
     }
 }
