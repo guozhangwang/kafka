@@ -119,10 +119,28 @@ public class KafkaRaftClient implements RaftClient {
 
     private final AtomicReference<GracefulShutdown> shutdown = new AtomicReference<>();
     private final Logger logger;
+
+    /**
+     * This timer is used to encapsulate several timeout mechanism of the client. It should be continuously updated with
+     * new deadline time:
+     *
+     * 1. If the client is in leader state, the timer is for the fetch timeout from the majority of quorum;
+     *    when it expired, the leader should try to use find-quorum to discover if there's a new leader.
+     *
+     * 2. If the client is in candidate state requesting votes from others, the timer is for the election timeout;
+     *    when it expired, the candidate should treat the current election as already failed.
+     *
+     * 3. If the client is in candidate state completing a failed election, the timer is for the exponential election backoff
+     *    based on the number of retries; when it expired, the candidate can bump the epoch and start the next election.
+     *
+     * 4. If the client is in the non-leader voter state, the timer is for the fetch timeout;
+     *    when it expires, the voter should transit to candidate with bumped epoch and start the election.
+     */
     private final Time time;
     private final Timer timer;
+
     private final int electionTimeoutMs;
-    private final int electionJitterMs;
+    private final int electionBackoffMaxMs;
     private final int fetchTimeoutMs;
     private final int requestTimeoutMs;
     private final int fetchMaxWaitMs;
@@ -160,7 +178,7 @@ public class KafkaRaftClient implements RaftClient {
             advertisedListener,
             raftConfig.bootstrapServers(),
             raftConfig.electionTimeoutMs(),
-            raftConfig.electionJitterMaxMs(),
+            raftConfig.electionBackoffMaxMs(),
             raftConfig.fetchTimeoutMs(),
             raftConfig.retryBackoffMs(),
             raftConfig.requestTimeoutMs(),
@@ -178,7 +196,7 @@ public class KafkaRaftClient implements RaftClient {
                            InetSocketAddress advertisedListener,
                            List<InetSocketAddress> bootstrapServers,
                            int electionTimeoutMs,
-                           int electionJitterMs,
+                           int electionBackoffMaxMs,
                            int fetchTimeoutMs,
                            int retryBackoffMs,
                            int requestTimeoutMs,
@@ -193,7 +211,7 @@ public class KafkaRaftClient implements RaftClient {
         this.time = time;
         this.timer = time.timer(fetchTimeoutMs);    // initialize assuming it is an observer
         this.electionTimeoutMs = electionTimeoutMs;
-        this.electionJitterMs = electionJitterMs;
+        this.electionBackoffMaxMs = electionBackoffMaxMs;
         this.fetchTimeoutMs = fetchTimeoutMs;
         this.requestTimeoutMs = requestTimeoutMs;
         this.fetchMaxWaitMs = fetchMaxWaitMs;
@@ -301,7 +319,7 @@ public class KafkaRaftClient implements RaftClient {
             onBecomeLeader(quorum.leaderStateOrThrow());
         } else if (quorum.isCandidate()) {
             // If the quorum consists of a single node, we can become leader immediately
-            onBecomeCandidate(quorum.candidateStateOrThrow(), 0);
+            onBecomeCandidate(quorum.candidateStateOrThrow());
         } else if (quorum.isFollower()) {
             FollowerState state = quorum.followerStateOrThrow();
             if (quorum.isVoter() && quorum.epoch() == 0) {
@@ -344,7 +362,7 @@ public class KafkaRaftClient implements RaftClient {
         timer.reset(fetchTimeoutMs);
         kafkaRaftMetrics.maybeUpdateElectionLatency(currentTimeMs);
 
-        logger.error("{} become the leader for epoch {}", state.localId(), state.epoch());
+        logger.info("{} become the leader for epoch {}", state.localId(), state.epoch());
     }
 
     private void appendControlRecord(Records controlRecord) {
@@ -367,7 +385,7 @@ public class KafkaRaftClient implements RaftClient {
         }
     }
 
-    private void onBecomeCandidate(CandidateState state, int retries) throws IOException {
+    private void onBecomeCandidate(CandidateState state) throws IOException {
         if (!maybeBecomeLeader(state)) {
             resetConnections();
 
@@ -381,7 +399,7 @@ public class KafkaRaftClient implements RaftClient {
     private void becomeCandidate(int retries) throws IOException {
         // after we become candidate, we may not fetch from leader any more
         CandidateState state = quorum.becomeCandidate(retries);
-        onBecomeCandidate(state, retries);
+        onBecomeCandidate(state);
     }
 
     private void becomeUnattachedFollower(int epoch) throws IOException {
@@ -429,6 +447,8 @@ public class KafkaRaftClient implements RaftClient {
             }
         }
         unwrittenAppends.clear();
+
+        logger.info("{} become a {} for epoch {}", quorum.localId, quorum.isVoter() ? "follower" : "observer", quorum.epoch());
     }
 
     private void onBecomeFollowerOfElectedLeader(FollowerState state) {
@@ -576,7 +596,6 @@ public class KafkaRaftClient implements RaftClient {
     private int randomElectionTimeoutMs() {
         if (electionTimeoutMs == 0)
             return 0;
-        // avoiding float calculations here
         return electionTimeoutMs + random.nextInt(electionTimeoutMs);
     }
 
@@ -584,7 +603,7 @@ public class KafkaRaftClient implements RaftClient {
         if (retries == 0)
             return 0;
 
-        return Math.min(RETRY_BACKOFF_BASE_MS * random.nextInt(2 << (retries - 1)), electionJitterMs);
+        return Math.min(RETRY_BACKOFF_BASE_MS * random.nextInt(2 << (retries - 1)), electionBackoffMaxMs);
     }
     private BeginQuorumEpochResponseData buildBeginQuorumEpochResponse(Errors error) {
         return new BeginQuorumEpochResponseData()
@@ -685,8 +704,8 @@ public class KafkaRaftClient implements RaftClient {
                 if (position == 0) {
                     becomeCandidate(0);
                 } else {
-                    int retryBackOffBaseMs = electionJitterMs >> (preferredSuccessors.size() - 1);
-                    timer.reset(Math.min(electionJitterMs, retryBackOffBaseMs << (position - 1)));
+                    int retryBackOffBaseMs = electionBackoffMaxMs >> (preferredSuccessors.size() - 1);
+                    timer.reset(Math.min(electionBackoffMaxMs, retryBackOffBaseMs << (position - 1)));
                 }
 
             }
