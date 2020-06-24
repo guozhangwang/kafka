@@ -114,8 +114,8 @@ class KafkaMetadataLog(time: Time, log: Log, maxFetchSizeInBytes: Int = 1024 * 1
       case Some(segmentPosition: SegmentPosition) => log.updateHighWatermarkOffsetMetadata(
         new kafka.server.LogOffsetMetadata(
           offsetMetadata.offset,
-          segmentPosition.segmentBaseOffset,
-          segmentPosition.relativePositionInSegment)
+          segmentPosition.baseOffset,
+          segmentPosition.relativePosition)
       )
       case _ => log.updateHighWatermark(offsetMetadata.offset)
     }
