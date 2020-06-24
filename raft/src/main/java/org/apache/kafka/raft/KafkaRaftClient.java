@@ -341,6 +341,8 @@ public class KafkaRaftClient implements RaftClient {
 
         timer.reset(fetchTimeoutMs);
         kafkaRaftMetrics.maybeUpdateElectionLatency(currentTimeMs);
+
+        logger.error("{} become the leader for epoch {}", state.localId(), state.epoch());
     }
 
     private void appendControlRecord(Records controlRecord) {
@@ -351,20 +353,27 @@ public class KafkaRaftClient implements RaftClient {
         kafkaRaftMetrics.updateLogEnd(endOffset());
     }
 
-    private void maybeBecomeLeader(CandidateState state) throws IOException {
+    private boolean maybeBecomeLeader(CandidateState state) throws IOException {
         if (state.isVoteGranted()) {
             long endOffset = log.endOffset();
             LeaderState leaderState = quorum.becomeLeader(endOffset);
             onBecomeLeader(leaderState);
+
+            return true;
+        } else {
+            return false;
         }
     }
 
     private void onBecomeCandidate(CandidateState state, int retries) throws IOException {
-        maybeBecomeLeader(state);
-        resetConnections();
+        if (!maybeBecomeLeader(state)) {
+            resetConnections();
 
-        kafkaRaftMetrics.updateElectionStartMs(time.milliseconds());
-        timer.reset(randomElectionTimeoutMs());
+            kafkaRaftMetrics.updateElectionStartMs(time.milliseconds());
+            timer.reset(randomElectionTimeoutMs());
+
+            logger.info("{} become the candidate for epoch {}", state.localId(), state.epoch());
+        }
     }
 
     private void becomeCandidate(int retries) throws IOException {
