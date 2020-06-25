@@ -108,7 +108,7 @@ public class RaftConfig extends AbstractConfig {
                 5000,
                 atLeast(0),
                 ConfigDef.Importance.HIGH,
-                    QUORUM_ELECTION_BACKOFF_MAX_MS_DOC)
+                QUORUM_ELECTION_BACKOFF_MAX_MS_DOC)
             .define(QUORUM_FETCH_TIMEOUT_MS_CONFIG,
                 ConfigDef.Type.INT,
                 15000,

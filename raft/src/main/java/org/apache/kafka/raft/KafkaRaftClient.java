@@ -134,6 +134,10 @@ public class KafkaRaftClient implements RaftClient {
      *
      * 4. If the client is in the non-leader voter state, the timer is for the fetch timeout;
      *    when it expires, the voter should transit to candidate with bumped epoch and start the election.
+     *
+     * 5. If a non-leader voter received an end-epoch request from the old leader, it's timer would be set as the exponential
+     *    election backoff based on the old leader's successor preference; when it expired, the voter would bump the epoch
+     *    and start the election as a candidate.
      */
     private final Time time;
     private final Timer timer;
@@ -323,7 +327,7 @@ public class KafkaRaftClient implements RaftClient {
             FollowerState state = quorum.followerStateOrThrow();
             if (quorum.isVoter() && quorum.epoch() == 0) {
                 // If we're initializing for the first time, become a candidate immediately
-                becomeCandidate(0);
+                becomeCandidate();
             } else {
                 if (state.hasLeader())
                     onBecomeFollowerOfElectedLeader(quorum.followerStateOrThrow());
@@ -395,9 +399,9 @@ public class KafkaRaftClient implements RaftClient {
         }
     }
 
-    private void becomeCandidate(int retries) throws IOException {
+    private void becomeCandidate() throws IOException {
         // after we become candidate, we may not fetch from leader any more
-        CandidateState state = quorum.becomeCandidate(retries);
+        CandidateState state = quorum.becomeCandidate();
         onBecomeCandidate(state);
     }
 
@@ -579,10 +583,10 @@ public class KafkaRaftClient implements RaftClient {
                     state.recordRejectedVote(remoteNodeId);
                     if (state.isVoteRejected() && !state.isBackingOff()) {
                         logger.info("Insufficient remaining votes to become leader (rejected by {}). " +
-                            "We will backoff before retrying", state.rejectingVoters());
+                            "We will backoff before retrying election again", state.rejectingVoters());
 
-                        state.recordElectionFailed();
-                        timer.reset(exponentialElectionBackoffMs(state.retries()));
+                        state.startBackingOff();
+                        timer.reset(binaryExponentialElectionBackoffMs(state.retries()));
                     }
                 }
             }
@@ -598,12 +602,25 @@ public class KafkaRaftClient implements RaftClient {
         return electionTimeoutMs + random.nextInt(electionTimeoutMs);
     }
 
-    private int exponentialElectionBackoffMs(int retries) {
-        if (retries == 0)
-            return 0;
+    private int binaryExponentialElectionBackoffMs(int retries) {
+        if (retries <= 0) {
+            throw new IllegalArgumentException("Retries " + retries + " should be larger than zero");
+        }
 
         return Math.min(RETRY_BACKOFF_BASE_MS * random.nextInt(2 << (retries - 1)), electionBackoffMaxMs);
     }
+
+    private int strictExponentialElectionBackoffMs(int positionInSuccessors, int totalNumSuccessors) {
+        if (positionInSuccessors <= 0 || positionInSuccessors >= totalNumSuccessors) {
+            throw new IllegalArgumentException("Position " + positionInSuccessors + " should be larger than zero" +
+                    " and smaller than total number of successors " + totalNumSuccessors);
+        }
+
+        int retryBackOffBaseMs = electionBackoffMaxMs >> (totalNumSuccessors - 1);
+        return Math.min(electionBackoffMaxMs, retryBackOffBaseMs << (positionInSuccessors - 1));
+    }
+
+
     private BeginQuorumEpochResponseData buildBeginQuorumEpochResponse(Errors error) {
         return new BeginQuorumEpochResponseData()
                 .setErrorCode(error.code())
@@ -698,13 +715,13 @@ public class KafkaRaftClient implements RaftClient {
                 }
                 final int position = preferredSuccessors.indexOf(quorum.localId);
                 // Based on the priority inside the preferred successors, choose the corresponding delayed
-                // election time so that the most up-to-date voter has a higher chance to be elected. If
-                // the node's priority is highest, become candidate immediately instead of waiting for next poll.
+                // election backoff time based on strict exponential mechanism so that the most up-to-date voter
+                // has a higher chance to be elected. If the node's priority is highest, become candidate immediately
+                // instead of waiting for next poll.
                 if (position == 0) {
-                    becomeCandidate(0);
+                    becomeCandidate();
                 } else {
-                    int retryBackOffBaseMs = electionBackoffMaxMs >> (preferredSuccessors.size() - 1);
-                    timer.reset(Math.min(electionBackoffMaxMs, retryBackOffBaseMs << (position - 1)));
+                    timer.reset(strictExponentialElectionBackoffMs(position, preferredSuccessors.size()));
                 }
 
             }
@@ -1387,16 +1404,16 @@ public class KafkaRaftClient implements RaftClient {
 
             if (quorum.isVoter() && !quorum.isLeader() && timer.isExpired()) {
                 logger.debug("Become candidate due to fetch timeout");
-                becomeCandidate(0);
+                becomeCandidate();
             } else if (quorum.isCandidate() && timer.isExpired()) {
                 CandidateState state = quorum.candidateStateOrThrow();
                 if (state.isBackingOff()) {
                     logger.debug("Re-elect as candidate after election backoff has completed");
-                    becomeCandidate(state.retries());
+                    becomeCandidate();
                 } else {
                     logger.debug("Election has timed out, backing off before re-elect again");
-                    state.recordElectionFailed();
-                    timer.reset(exponentialElectionBackoffMs(state.retries()));
+                    state.startBackingOff();
+                    timer.reset(binaryExponentialElectionBackoffMs(state.retries()));
                 }
             }
 
