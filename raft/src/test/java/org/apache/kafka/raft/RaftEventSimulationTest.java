@@ -700,7 +700,7 @@ public class RaftEventSimulationTest {
             PersistentState persistentState = nodes.get(nodeId);
             MockNetworkChannel channel = new MockNetworkChannel(correlationIdCounter);
             QuorumState quorum = new QuorumState(nodeId, voters(), persistentState.store, logContext);
-            MockFuturePurgatory<Integer> fetchPurgatory = new MockFuturePurgatory<>(time);
+            MockFuturePurgatory<Long> fetchPurgatory = new MockFuturePurgatory<>(time);
             MockFuturePurgatory<Long> appendPurgatory = new MockFuturePurgatory<>(time);
             Metrics metrics = new Metrics(time);
 

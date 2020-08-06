@@ -194,7 +194,7 @@ class RaftServer(val config: KafkaConfig,
       logContext
     )
 
-    val fetchPurgatory = new KafkaFuturePurgatory[Integer](
+    val fetchPurgatory = new KafkaFuturePurgatory[lang.Long](
       config.brokerId,
       new SystemTimer("raft-fetch-purgatory-reaper"),
       reaperEnabled = true)
@@ -346,7 +346,7 @@ object RaftServer extends Logging {
       val config = KafkaConfig.fromProps(serverProps, false)
 
       val verbose = serverProps.getProperty("verbose").toBoolean
-      val ackMode = AckMode.forConfig(serverProps.getProperty("commit.mode"))
+      val ackMode = AckMode.forConfig(serverProps.getProperty("ack.mode"))
       val server = new RaftServer(config, ackMode, verbose)
 
       Exit.addShutdownHook("raft-shutdown-hook", server.shutdown)

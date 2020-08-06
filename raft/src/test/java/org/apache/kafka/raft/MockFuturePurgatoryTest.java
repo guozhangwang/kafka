@@ -24,6 +24,7 @@ import java.util.concurrent.CompletableFuture;
 
 import static org.apache.kafka.test.TestUtils.assertFutureThrows;
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertThrows;
 import static org.junit.Assert.assertTrue;
 
 public class MockFuturePurgatoryTest {
@@ -32,15 +33,13 @@ public class MockFuturePurgatoryTest {
 
     @Test
     public void testCompletion() throws Exception {
-        CompletableFuture<Long> future1 = new CompletableFuture<>();
-        purgatory.await(future1, 1L, 500L);
+        CompletableFuture<Long> future1 = purgatory.await(1L, 500L);
         assertEquals(1, purgatory.numWaiting());
 
-        CompletableFuture<Long> future2 = new CompletableFuture<>();
-        purgatory.await(future2, 2L, 1000L);
+        CompletableFuture<Long> future2 = purgatory.await(2L, 1000L);
         assertEquals(2, purgatory.numWaiting());
 
-        purgatory.completeAll(3L, 1L);
+        purgatory.complete(3L, 1L);
         assertEquals(0, purgatory.numWaiting());
         assertTrue(future1.isDone());
         assertEquals(1L, future1.get().longValue());
@@ -49,15 +48,32 @@ public class MockFuturePurgatoryTest {
     }
 
     @Test
+    public void testCompletionExceptionally() throws Exception {
+        CompletableFuture<Long> future1 = purgatory.await(1L, 500L);
+        assertEquals(1, purgatory.numWaiting());
+
+        CompletableFuture<Long> future2 = purgatory.await(2L, 1000L);
+        assertEquals(2, purgatory.numWaiting());
+
+        Throwable exception = new Throwable();
+        purgatory.completeExceptionally(3L, exception);
+
+        assertEquals(0, purgatory.numWaiting());
+        assertTrue(future1.isDone());
+        Throwable thrown1 = assertThrows(Throwable.class, future1::get);
+        assertEquals(exception, thrown1);
+        assertTrue(future2.isDone());
+        Throwable thrown2 = assertThrows(Throwable.class, future2::get);
+        assertEquals(exception, thrown2);
+    }
+
+    @Test
     public void testExpiration() {
-        CompletableFuture<Long> future1 = new CompletableFuture<>();
-        purgatory.await(future1, 1L, 500L);
+        CompletableFuture<Long> future1 = purgatory.await(1L, 500L);
 
-        CompletableFuture<Long> future2 = new CompletableFuture<>();
-        purgatory.await(future2, 2L, 500L);
+        CompletableFuture<Long> future2 = purgatory.await(2L, 500L);
 
-        CompletableFuture<Long> future3 = new CompletableFuture<>();
-        purgatory.await(future3, 3L, 1000L);
+        CompletableFuture<Long> future3 = purgatory.await(3L, 1000L);
 
         assertEquals(3, purgatory.numWaiting());
 
@@ -75,5 +91,4 @@ public class MockFuturePurgatoryTest {
         assertFutureThrows(future3, TimeoutException.class);
         assertEquals(0, purgatory.numWaiting());
     }
-
 }

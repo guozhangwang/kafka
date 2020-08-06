@@ -32,17 +32,32 @@ public class MockFuturePurgatory<T extends Comparable<T>> implements FuturePurga
     }
 
     @Override
-    public void await(CompletableFuture<Long> future, T value, long maxWaitTimeMs) {
+    public CompletableFuture<Long> await(T value, long maxWaitTimeMs) {
+        CompletableFuture<Long> future = new CompletableFuture<>();
         long expirationTimeMs = time.milliseconds() + maxWaitTimeMs;
         delayedFutures.add(new DelayedFuture(value, expirationTimeMs, future));
+
+        return future;
     }
 
     @Override
-    public void completeAll(T value, long currentTime) {
+    public void complete(T value, long currentTimeMs) {
         while (!delayedFutures.isEmpty()) {
             if (delayedFutures.peek().id.compareTo(value) < 0) {
                 DelayedFuture delayedFuture = delayedFutures.poll();
-                delayedFuture.future.complete(currentTime);
+                delayedFuture.future.complete(currentTimeMs);
+            } else {
+                break;
+            }
+        }
+    }
+
+    @Override
+    public void completeExceptionally(T value, Throwable exception) {
+        while (!delayedFutures.isEmpty()) {
+            if (delayedFutures.peek().id.compareTo(value) < 0) {
+                DelayedFuture delayedFuture = delayedFutures.poll();
+                delayedFuture.future.completeExceptionally(exception);
             } else {
                 break;
             }

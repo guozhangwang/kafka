@@ -51,7 +51,7 @@ public class SimpleKeyValueStoreTest {
         QuorumStateStore store = new MockQuorumStateStore();
 
         MockTime time = new MockTime();
-        MockFuturePurgatory<Integer> fetchPurgatory = new MockFuturePurgatory<>(time);
+        MockFuturePurgatory<Long> fetchPurgatory = new MockFuturePurgatory<>(time);
         MockFuturePurgatory<Long> appendPurgatory = new MockFuturePurgatory<>(time);
 
         store.writeElectionState(ElectionState.withElectedLeader(epoch, localId, Collections.singleton(localId)));
