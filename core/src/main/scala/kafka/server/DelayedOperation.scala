@@ -271,13 +271,15 @@ final class DelayedOperationPurgatory[T <: DelayedOperation](purgatoryName: Stri
    *
    * @return the number of completed operations during this process
    */
-  def checkAndComplete(key: Any): Int = {
+  def checkAndComplete(key: Any): Int = checkAndComplete(key, stopEarly = false)
+
+  def checkAndComplete(key: Any, stopEarly: Boolean): Int = {
     val wl = watcherList(key)
     val watchers = inLock(wl.watchersLock) { wl.watchersByKey.get(key) }
     val numCompleted = if (watchers == null)
       0
     else
-      watchers.tryCompleteWatched()
+      watchers.tryCompleteWatched(stopEarly)
     debug(s"Request key $key unblocked $numCompleted $purgatoryName operations")
     numCompleted
   }
@@ -366,11 +368,12 @@ final class DelayedOperationPurgatory[T <: DelayedOperation](purgatoryName: Stri
     }
 
     // traverse the list and try to complete some watched elements
-    def tryCompleteWatched(): Int = {
+    def tryCompleteWatched(stopEarly: Boolean): Int = {
       var completed = 0
 
       val iter = operations.iterator()
-      while (iter.hasNext) {
+      var couldStop = false
+      while (iter.hasNext && !couldStop) {
         val curr = iter.next()
         if (curr.isCompleted) {
           // another thread has completed this operation, just remove it
@@ -378,6 +381,8 @@ final class DelayedOperationPurgatory[T <: DelayedOperation](purgatoryName: Stri
         } else if (curr.maybeTryComplete()) {
           iter.remove()
           completed += 1
+        } else if (stopEarly) {
+          couldStop = true
         }
       }
 

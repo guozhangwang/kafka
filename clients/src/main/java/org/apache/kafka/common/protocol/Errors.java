@@ -321,12 +321,12 @@ public enum Errors {
     NO_REASSIGNMENT_IN_PROGRESS(85, "No partition reassignment is in progress.",
             NoReassignmentInProgressException::new),
     GROUP_SUBSCRIBED_TO_TOPIC(86, "Deleting offsets of a topic is forbidden while the consumer group is actively subscribed to it.",
-        GroupSubscribedToTopicException::new),
+            GroupSubscribedToTopicException::new),
     INVALID_RECORD(87, "This record has failed the validation on broker and hence will be rejected.", InvalidRecordException::new),
     UNSTABLE_OFFSET_COMMIT(88, "There are unstable offsets that need to be cleared.", UnstableOffsetCommitException::new),
     THROTTLING_QUOTA_EXCEEDED(89, "The throttling quota has been exceeded.", ThrottlingQuotaExceededException::new),
     INCONSISTENT_VOTER_SET(90, "Indicates that the either the sender or recipient of a " +
-        "voter-only request is not one of the expected voters", InconsistentVoterSetException::new);
+            "voter-only request is not one of the expected voters", InconsistentVoterSetException::new);
 
     private static final Logger log = LoggerFactory.getLogger(Errors.class);
 

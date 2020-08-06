@@ -16,6 +16,7 @@
  */
 package unit.kafka.raft
 
+import java.lang
 import java.util.concurrent.CompletableFuture
 
 import kafka.raft.KafkaFuturePurgatory
@@ -31,19 +32,19 @@ class KafkaFuturePurgatoryTest {
   def testExpiration(): Unit = {
     val brokerId = 0
     val timer = new MockTimer()
-    val purgatory = new KafkaFuturePurgatory(brokerId, timer, reaperEnabled = false)
+    val purgatory = new KafkaFuturePurgatory[Int](brokerId, timer, reaperEnabled = false)
     assertEquals(0, purgatory.numWaiting())
 
-    val future1 = new CompletableFuture[Void]()
-    purgatory.await(future1, 500)
+    val future1 = new CompletableFuture[lang.Long]()
+    purgatory.await(future1, 1, 500)
     assertEquals(1, purgatory.numWaiting())
 
-    val future2 = new CompletableFuture[Void]()
-    purgatory.await(future2, 500)
+    val future2 = new CompletableFuture[lang.Long]()
+    purgatory.await(future2, 2, 500)
     assertEquals(2, purgatory.numWaiting())
 
-    val future3 = new CompletableFuture[Void]()
-    purgatory.await(future3, 1000)
+    val future3 = new CompletableFuture[lang.Long]()
+    purgatory.await(future3, 3, 1000)
     assertEquals(3, purgatory.numWaiting())
 
     timer.advanceClock(501)
@@ -60,29 +61,30 @@ class KafkaFuturePurgatoryTest {
   def testCompletion(): Unit = {
     val brokerId = 0
     val timer = new MockTimer()
-    val purgatory = new KafkaFuturePurgatory(brokerId, timer, reaperEnabled = false)
+
+    val purgatory = new KafkaFuturePurgatory[Int](brokerId, timer, reaperEnabled = false)
     assertEquals(0, purgatory.numWaiting())
 
-    val future1 = new CompletableFuture[Void]()
-    purgatory.await(future1, 500)
+    val future1 = new CompletableFuture[lang.Long]()
+    purgatory.await(future1, 1, 500)
     assertEquals(1, purgatory.numWaiting())
 
-    val future2 = new CompletableFuture[Void]()
-    purgatory.await(future2, 500)
+    val future2 = new CompletableFuture[lang.Long]()
+    purgatory.await(future2, 2, 500)
     assertEquals(2, purgatory.numWaiting())
 
-    val future3 = new CompletableFuture[Void]()
-    purgatory.await(future3, 1000)
+    val future3 = new CompletableFuture[lang.Long]()
+    purgatory.await(future3, 3, 1000)
     assertEquals(3, purgatory.numWaiting())
 
-    purgatory.completeAll(null)
+    purgatory.completeAll(4, 100L)
     assertTrue(future1.isDone)
-    assertEquals(null, future1.get())
+    assertEquals(100L, future1.get())
 
     assertTrue(future2.isDone)
-    assertEquals(null, future2.get())
+    assertEquals(100L, future2.get())
 
     assertTrue(future3.isDone)
-    assertEquals(null, future3.get())
+    assertEquals(100L, future3.get())
   }
 }
