@@ -23,8 +23,8 @@ import org.apache.kafka.common.message.DescribeQuorumResponseData;
 import org.apache.kafka.common.message.DescribeQuorumResponseData.ReplicaState;
 import org.apache.kafka.common.message.EndQuorumEpochRequestData;
 import org.apache.kafka.common.message.EndQuorumEpochResponseData;
-import org.apache.kafka.common.message.FetchQuorumRecordsRequestData;
-import org.apache.kafka.common.message.FetchQuorumRecordsResponseData;
+import org.apache.kafka.common.message.FetchRequestData;
+import org.apache.kafka.common.message.FetchResponseData;
 import org.apache.kafka.common.message.FindQuorumRequestData;
 import org.apache.kafka.common.message.FindQuorumResponseData;
 import org.apache.kafka.common.message.LeaderChangeMessage;
@@ -413,7 +413,7 @@ public class KafkaRaftClientTest {
 
         pollUntilSend(client);
 
-        assertSentFetchQuorumRecordsRequest(leaderEpoch, 0, 0);
+        assertSentFetchRequest(leaderEpoch, 0, 0);
 
         time.sleep(retryBackoffMs);
 
@@ -762,7 +762,7 @@ public class KafkaRaftClientTest {
 
         pollUntilSend(client);
 
-        assertSentFetchQuorumRecordsRequest(epoch, 0L, 0);
+        assertSentFetchRequest(epoch, 0L, 0);
     }
 
     @Test
@@ -784,7 +784,7 @@ public class KafkaRaftClientTest {
 
         pollUntilSend(client);
 
-        assertSentFetchQuorumRecordsRequest(epoch, 1L, lastEpoch);
+        assertSentFetchRequest(epoch, 1L, lastEpoch);
     }
 
     @Test
@@ -805,7 +805,7 @@ public class KafkaRaftClientTest {
 
         pollUntilSend(client);
 
-        assertSentFetchQuorumRecordsRequest(epoch, 1L, lastEpoch);
+        assertSentFetchRequest(epoch, 1L, lastEpoch);
 
         time.sleep(fetchTimeoutMs);
 
@@ -864,22 +864,22 @@ public class KafkaRaftClientTest {
         time.sleep(1L);
         deliverRequest(fetchQuorumRecordsRequest(epoch, 1, 0L, epoch, 0));
         client.poll();
-        assertSentFetchQuorumRecordsResponse(Errors.NONE, epoch, OptionalInt.of(localId));
+        assertSentFetchResponse(Errors.NONE, epoch, OptionalInt.of(localId));
 
         time.sleep(1L);
         deliverRequest(fetchQuorumRecordsRequest(epoch, 2, 0L, epoch, 0));
         client.poll();
-        assertSentFetchQuorumRecordsResponse(Errors.NONE, epoch, OptionalInt.of(localId));
+        assertSentFetchResponse(Errors.NONE, epoch, OptionalInt.of(localId));
 
         time.sleep(1L);
         deliverRequest(fetchQuorumRecordsRequest(epoch, 3, 0L, epoch, 0));
         client.poll();
-        assertSentFetchQuorumRecordsResponse(Errors.NONE, epoch, OptionalInt.of(localId));
+        assertSentFetchResponse(Errors.NONE, epoch, OptionalInt.of(localId));
 
         time.sleep(1L);
         deliverRequest(fetchQuorumRecordsRequest(epoch, 4, 0L, epoch, 0));
         client.poll();
-        assertSentFetchQuorumRecordsResponse(Errors.NONE, epoch, OptionalInt.of(localId));
+        assertSentFetchResponse(Errors.NONE, epoch, OptionalInt.of(localId));
 
         // we have majority of quorum sent fetch, so should not try to find-quorum
         time.sleep(fetchTimeoutMs - 3);
@@ -920,27 +920,27 @@ public class KafkaRaftClientTest {
         deliverRequest(fetchQuorumRecordsRequest(
             epoch, otherNodeId, -5L, 0, 0));
         client.poll();
-        assertSentFetchQuorumRecordsResponse(Errors.INVALID_REQUEST, epoch, OptionalInt.of(localId));
+        assertSentFetchResponse(Errors.INVALID_REQUEST, epoch, OptionalInt.of(localId));
 
         deliverRequest(fetchQuorumRecordsRequest(
             epoch, otherNodeId, 0L, -1, 0));
         client.poll();
-        assertSentFetchQuorumRecordsResponse(Errors.INVALID_REQUEST, epoch, OptionalInt.of(localId));
+        assertSentFetchResponse(Errors.INVALID_REQUEST, epoch, OptionalInt.of(localId));
 
         deliverRequest(fetchQuorumRecordsRequest(
             epoch, otherNodeId, 0L, epoch + 1, 0));
         client.poll();
-        assertSentFetchQuorumRecordsResponse(Errors.INVALID_REQUEST, epoch, OptionalInt.of(localId));
+        assertSentFetchResponse(Errors.INVALID_REQUEST, epoch, OptionalInt.of(localId));
 
         deliverRequest(fetchQuorumRecordsRequest(
             epoch + 1, otherNodeId, 0L, 0, 0));
         client.poll();
-        assertSentFetchQuorumRecordsResponse(Errors.INVALID_REQUEST, epoch, OptionalInt.of(localId));
+        assertSentFetchResponse(Errors.INVALID_REQUEST, epoch, OptionalInt.of(localId));
 
         deliverRequest(fetchQuorumRecordsRequest(
             epoch, otherNodeId, 0L, 0, -1));
         client.poll();
-        assertSentFetchQuorumRecordsResponse(Errors.INVALID_REQUEST, epoch, OptionalInt.of(localId));
+        assertSentFetchResponse(Errors.INVALID_REQUEST, epoch, OptionalInt.of(localId));
     }
 
     @Test
@@ -1011,7 +1011,7 @@ public class KafkaRaftClientTest {
         // After expiration of the max wait time, the fetch returns an empty record set
         time.sleep(maxWaitTimeMs);
         client.poll();
-        MemoryRecords fetchedRecords = assertSentFetchQuorumRecordsResponse(Errors.NONE, epoch, OptionalInt.of(localId));
+        MemoryRecords fetchedRecords = assertSentFetchResponse(Errors.NONE, epoch, OptionalInt.of(localId));
         assertEquals(0, fetchedRecords.sizeInBytes());
     }
 
@@ -1039,7 +1039,7 @@ public class KafkaRaftClientTest {
         client.poll();
         assertTrue(future.isDone());
 
-        MemoryRecords fetchedRecords = assertSentFetchQuorumRecordsResponse(Errors.NONE, epoch, OptionalInt.of(localId));
+        MemoryRecords fetchedRecords = assertSentFetchResponse(Errors.NONE, epoch, OptionalInt.of(localId));
         List<Record> recordList = Utils.toList(fetchedRecords.records());
         assertEquals(appendRecords.length, recordList.size());
         for (int i = 0; i < appendRecords.length; i++) {
@@ -1061,19 +1061,19 @@ public class KafkaRaftClientTest {
         deliverRequest(fetchQuorumRecordsRequest(epoch, voter2, 1L, epoch, 500));
         client.poll();
         assertTrue(channel.drainSendQueue().stream()
-            .noneMatch(msg -> msg.data() instanceof FetchQuorumRecordsResponseData));
+            .noneMatch(msg -> msg.data() instanceof FetchResponseData));
 
         // Now we get a BeginEpoch from the other voter and become a follower
         deliverRequest(beginEpochRequest(epoch + 1, voter3));
         client.poll();
         assertEquals(ElectionState.withElectedLeader(epoch + 1, voter3, voters), quorumStateStore.readElectionState());
 
-        // We expect the BeginQuorumEpoch response and a failed FetchQuorum response
+        // We expect the BeginQuorumEpoch response and a failed Fetch response
         assertSentBeginQuorumEpochResponse(Errors.NONE, epoch + 1, OptionalInt.of(voter3));
 
         // The fetch should be satisfied immediately and return an error
-        MemoryRecords fetchedRecords = assertSentFetchQuorumRecordsResponse(
-            Errors.FENCED_LEADER_EPOCH, epoch + 1, OptionalInt.of(voter3));
+        MemoryRecords fetchedRecords = assertSentFetchResponse(
+            Errors.NOT_LEADER_OR_FOLLOWER, epoch + 1, OptionalInt.of(voter3));
         assertEquals(0, fetchedRecords.sizeInBytes());
     }
 
@@ -1122,7 +1122,7 @@ public class KafkaRaftClientTest {
 
         // Wait until we have a Fetch inflight to the leader
         pollUntilSend(client);
-        int fetchCorrelationId = assertSentFetchQuorumRecordsRequest(epoch, 0L, 0);
+        int fetchCorrelationId = assertSentFetchRequest(epoch, 0L, 0);
 
         // Now await the fetch timeout and become a candidate
         time.sleep(fetchTimeoutMs);
@@ -1133,7 +1133,7 @@ public class KafkaRaftClientTest {
         Records records = MemoryRecords.withRecords(0L, CompressionType.NONE,
             3, new SimpleRecord("a".getBytes()), new SimpleRecord("b".getBytes()));
         deliverResponse(fetchCorrelationId, otherNodeId,
-            fetchRecordsResponse(epoch, otherNodeId, records, 0L, Errors.NONE));
+            fetchResponse(epoch, otherNodeId, records, 0L, Errors.NONE));
 
         client.poll();
         assertEquals(0, log.endOffset().offset);
@@ -1157,7 +1157,7 @@ public class KafkaRaftClientTest {
 
         // Wait until we have a Fetch inflight to the leader
         pollUntilSend(client);
-        int fetchCorrelationId = assertSentFetchQuorumRecordsRequest(epoch, 0L, 0);
+        int fetchCorrelationId = assertSentFetchRequest(epoch, 0L, 0);
 
         // Now receive a BeginEpoch from `voter3`
         deliverRequest(beginEpochRequest(epoch + 1, voter3));
@@ -1167,7 +1167,7 @@ public class KafkaRaftClientTest {
         // The fetch response from the old leader returns, but it should be ignored
         Records records = MemoryRecords.withRecords(0L, CompressionType.NONE,
             3, new SimpleRecord("a".getBytes()), new SimpleRecord("b".getBytes()));
-        FetchQuorumRecordsResponseData response = fetchRecordsResponse(epoch, voter2, records, 0L, Errors.NONE);
+        FetchResponseData response = fetchResponse(epoch, voter2, records, 0L, Errors.NONE);
         deliverResponse(fetchCorrelationId, voter2, response);
 
         client.poll();
@@ -1225,9 +1225,9 @@ public class KafkaRaftClientTest {
         assertEquals(ElectionState.withElectedLeader(epoch, leaderId, voters), quorumStateStore.readElectionState());
 
         client.poll();
-        int fetchCorrelationId = assertSentFetchQuorumRecordsRequest(epoch, 0L, 0);
+        int fetchCorrelationId = assertSentFetchRequest(epoch, 0L, 0);
 
-        FetchQuorumRecordsResponseData response = fetchRecordsResponse(
+        FetchResponseData response = fetchResponse(
             epoch, leaderId, MemoryRecords.EMPTY, 0L, Errors.BROKER_NOT_AVAILABLE);
         deliverResponse(fetchCorrelationId, leaderId, response);
         client.poll();
@@ -1250,7 +1250,7 @@ public class KafkaRaftClientTest {
 
         pollUntilSend(client);
         assertEquals(ElectionState.withElectedLeader(epoch, leaderId, voters), quorumStateStore.readElectionState());
-        assertSentFetchQuorumRecordsRequest(epoch, 0L, 0);
+        assertSentFetchRequest(epoch, 0L, 0);
 
         time.sleep(requestTimeoutMs);
         client.poll();
@@ -1357,7 +1357,7 @@ public class KafkaRaftClientTest {
         client.poll();
 
         long highWatermark = 0L;
-        assertSentFetchQuorumRecordsResponse(highWatermark, epoch);
+        assertSentFetchResponse(highWatermark, epoch);
 
         deliverRequest(DescribeQuorumRequest.singletonRequest(METADATA_PARTITION));
 
@@ -1391,7 +1391,7 @@ public class KafkaRaftClientTest {
 
         client.poll();
 
-        assertSentFetchQuorumRecordsResponse(-1L, epoch);
+        assertSentFetchResponse(-1L, epoch);
 
         // Append some records, so that the close follower will be able to advance further.
         log.appendAsLeader(Utils.mkSet(new SimpleRecord("foo".getBytes()),
@@ -1401,7 +1401,7 @@ public class KafkaRaftClientTest {
 
         client.poll();
 
-        assertSentFetchQuorumRecordsResponse(0L, epoch);
+        assertSentFetchResponse(0L, epoch);
     }
 
     @Test
@@ -1490,10 +1490,10 @@ public class KafkaRaftClientTest {
 
         pollUntilSend(client);
 
-        int fetchQuorumCorrelationId = assertSentFetchQuorumRecordsRequest(epoch, 0L, 0);
+        int fetchQuorumCorrelationId = assertSentFetchRequest(epoch, 0L, 0);
         Records records = MemoryRecords.withRecords(0L, CompressionType.NONE,
             3, new SimpleRecord("a".getBytes()), new SimpleRecord("b".getBytes()));
-        FetchQuorumRecordsResponseData response = fetchRecordsResponse(epoch, otherNodeId, records, 0L, Errors.NONE);
+        FetchResponseData response = fetchResponse(epoch, otherNodeId, records, 0L, Errors.NONE);
         deliverResponse(fetchQuorumCorrelationId, otherNodeId, response);
 
         client.poll();
@@ -1516,8 +1516,8 @@ public class KafkaRaftClientTest {
 
         // Receive an empty fetch response
         pollUntilSend(client);
-        int fetchQuorumCorrelationId = assertSentFetchQuorumRecordsRequest(epoch, 0L, 0);
-        FetchQuorumRecordsResponseData fetchResponse = fetchRecordsResponse(epoch, otherNodeId,
+        int fetchQuorumCorrelationId = assertSentFetchRequest(epoch, 0L, 0);
+        FetchResponseData fetchResponse = fetchResponse(epoch, otherNodeId,
             MemoryRecords.EMPTY, 0L, Errors.NONE);
         deliverResponse(fetchQuorumCorrelationId, otherNodeId, fetchResponse);
         client.poll();
@@ -1528,8 +1528,8 @@ public class KafkaRaftClientTest {
         pollUntilSend(client);
         Records records = MemoryRecords.withRecords(0L, CompressionType.NONE,
             epoch, new SimpleRecord("a".getBytes()), new SimpleRecord("b".getBytes()));
-        fetchQuorumCorrelationId = assertSentFetchQuorumRecordsRequest(epoch, 0L, 0);
-        fetchResponse = fetchRecordsResponse(epoch, otherNodeId,
+        fetchQuorumCorrelationId = assertSentFetchRequest(epoch, 0L, 0);
+        fetchResponse = fetchResponse(epoch, otherNodeId,
             records, 0L, Errors.NONE);
         deliverResponse(fetchQuorumCorrelationId, otherNodeId, fetchResponse);
         client.poll();
@@ -1538,8 +1538,8 @@ public class KafkaRaftClientTest {
 
         // The next fetch response is empty, but should still advance the high watermark
         pollUntilSend(client);
-        fetchQuorumCorrelationId = assertSentFetchQuorumRecordsRequest(epoch, 2L, epoch);
-        fetchResponse = fetchRecordsResponse(epoch, otherNodeId,
+        fetchQuorumCorrelationId = assertSentFetchRequest(epoch, 2L, epoch);
+        fetchResponse = fetchResponse(epoch, otherNodeId,
             MemoryRecords.EMPTY, 2L, Errors.NONE);
         deliverResponse(fetchQuorumCorrelationId, otherNodeId, fetchResponse);
         client.poll();
@@ -1604,7 +1604,7 @@ public class KafkaRaftClientTest {
         client.poll();
 
         // The BeginEpoch request eventually times out. We should not send another one.
-        assertSentFetchQuorumRecordsResponse(Errors.NONE, epoch, OptionalInt.of(localId));
+        assertSentFetchResponse(Errors.NONE, epoch, OptionalInt.of(localId));
         time.sleep(requestTimeoutMs);
 
         client.poll();
@@ -1646,7 +1646,7 @@ public class KafkaRaftClientTest {
 
         client.poll();
 
-        MemoryRecords fetchedRecords = assertSentFetchQuorumRecordsResponse(Errors.NONE, 1, OptionalInt.of(localId));
+        MemoryRecords fetchedRecords = assertSentFetchResponse(Errors.NONE, 1, OptionalInt.of(localId));
         List<MutableRecordBatch> batches = Utils.toList(fetchedRecords.batchIterator());
         assertEquals(2, batches.size());
 
@@ -1694,9 +1694,9 @@ public class KafkaRaftClientTest {
 
         pollUntilSend(client);
 
-        int correlationId = assertSentFetchQuorumRecordsRequest(epoch, 3L, lastEpoch);
+        int correlationId = assertSentFetchRequest(epoch, 3L, lastEpoch);
 
-        FetchQuorumRecordsResponseData response = outOfRangeFetchRecordsResponse(epoch, otherNodeId, 2L,
+        FetchResponseData response = outOfRangeFetchRecordsResponse(epoch, otherNodeId, 2L,
             lastEpoch, 1L);
         deliverResponse(correlationId, otherNodeId, response);
 
@@ -1706,7 +1706,7 @@ public class KafkaRaftClientTest {
 
         // Now we should be fetching
         client.poll();
-        assertSentFetchQuorumRecordsRequest(epoch, 2L, lastEpoch);
+        assertSentFetchRequest(epoch, 2L, lastEpoch);
     }
 
     @Test
@@ -1837,21 +1837,44 @@ public class KafkaRaftClientTest {
         assertEquals(partitionError, Errors.forCode(partitionResponse.errorCode()));
     }
 
-    private MemoryRecords assertSentFetchQuorumRecordsResponse(
+    private FetchResponseData.FetchablePartitionResponse assertSentPartitionResponse() {
+        List<RaftResponse.Outbound> sentMessages = channel.drainSentResponses(ApiKeys.FETCH);
+        assertEquals("Found unexpected sent messages " + sentMessages,
+            1, sentMessages.size());
+        RaftResponse.Outbound raftMessage = sentMessages.get(0);
+        assertEquals(ApiKeys.FETCH.id, raftMessage.data.apiKey());
+        FetchResponseData response = (FetchResponseData) raftMessage.data();
+        assertEquals(Errors.NONE, Errors.forCode(response.errorCode()));
+
+        assertEquals(1, response.responses().size());
+        assertEquals(METADATA_PARTITION.topic(), response.responses().get(0).topic());
+        assertEquals(1, response.responses().get(0).partitionResponses().size());
+        return response.responses().get(0).partitionResponses().get(0);
+    }
+
+    private MemoryRecords assertSentFetchResponse(
         Errors error,
         int epoch,
         OptionalInt leaderId
     ) {
-        List<RaftResponse.Outbound> sentMessages = channel.drainSentResponses(ApiKeys.FETCH_QUORUM_RECORDS);
-        assertEquals("Found unexpected sent messages " + sentMessages,
-            1, sentMessages.size());
-        RaftResponse.Outbound raftMessage = sentMessages.get(0);
-        assertEquals(ApiKeys.FETCH_QUORUM_RECORDS.id, raftMessage.data.apiKey());
-        FetchQuorumRecordsResponseData response = (FetchQuorumRecordsResponseData) raftMessage.data();
-        assertEquals(error, Errors.forCode(response.errorCode()));
-        assertEquals(epoch, response.leaderEpoch());
-        assertEquals(leaderId.orElse(-1), response.leaderId());
-        return MemoryRecords.readableRecords(response.records());
+        FetchResponseData.FetchablePartitionResponse partitionResponse = assertSentPartitionResponse();
+        FetchResponseData.PartitionHeader partitionHeader = partitionResponse.partitionHeader();
+        assertEquals(error, Errors.forCode(partitionHeader.errorCode()));
+        assertEquals(epoch, partitionHeader.currentLeader().leaderEpoch());
+        assertEquals(leaderId.orElse(-1), partitionHeader.currentLeader().leaderId());
+        return (MemoryRecords) partitionResponse.recordSet();
+    }
+
+    private MemoryRecords assertSentFetchResponse(
+        long highWatermark,
+        int leaderEpoch
+    ) {
+        FetchResponseData.FetchablePartitionResponse partitionResponse = assertSentPartitionResponse();
+        FetchResponseData.PartitionHeader partitionHeader = partitionResponse.partitionHeader();
+        assertEquals(Errors.NONE, Errors.forCode(partitionHeader.errorCode()));
+        assertEquals(leaderEpoch, partitionHeader.currentLeader().leaderEpoch());
+        assertEquals(highWatermark, partitionHeader.highWatermark());
+        return (MemoryRecords) partitionResponse.recordSet();
     }
 
     private void assertSentBeginQuorumEpochResponse(
@@ -1962,7 +1985,7 @@ public class KafkaRaftClientTest {
         return requests;
     }
 
-    private int assertSentFetchQuorumRecordsRequest(
+    private int assertSentFetchRequest(
         int epoch,
         long fetchOffset,
         int lastFetchedEpoch
@@ -1971,11 +1994,17 @@ public class KafkaRaftClientTest {
         assertEquals(1, sentMessages.size());
         RaftMessage raftMessage = sentMessages.get(0);
         assertTrue("Unexpected request type " + raftMessage.data(),
-            raftMessage.data() instanceof FetchQuorumRecordsRequestData);
-        FetchQuorumRecordsRequestData request = (FetchQuorumRecordsRequestData) raftMessage.data();
-        assertEquals(epoch, request.leaderEpoch());
-        assertEquals(fetchOffset, request.fetchOffset());
-        assertEquals(lastFetchedEpoch, request.lastFetchedEpoch());
+            raftMessage.data() instanceof FetchRequestData);
+        FetchRequestData request = (FetchRequestData) raftMessage.data();
+
+        assertEquals(1, request.topics().size());
+        assertEquals(METADATA_PARTITION.topic(), request.topics().get(0).topic());
+        assertEquals(1, request.topics().get(0).partitions().size());
+
+        FetchRequestData.FetchPartition fetchPartition = request.topics().get(0).partitions().get(0);
+        assertEquals(epoch, fetchPartition.currentLeaderEpoch());
+        assertEquals(fetchOffset, fetchPartition.fetchOffset());
+        assertEquals(lastFetchedEpoch, fetchPartition.lastFetchedEpoch());
         assertEquals(localId, request.replicaId());
         return raftMessage.correlationId();
     }
@@ -1990,51 +2019,46 @@ public class KafkaRaftClientTest {
         return null;
     }
 
-    private void assertSentFetchQuorumRecordsResponse(
-        long highWatermark,
-        int lastFetchedEpoch) {
-        List<RaftMessage> sentMessages = channel.drainSendQueue();
-        assertEquals(1, sentMessages.size());
-        RaftMessage raftMessage = sentMessages.get(0);
-        assertTrue("Unexpected request type " + raftMessage.data(),
-            raftMessage.data() instanceof FetchQuorumRecordsResponseData);
-        FetchQuorumRecordsResponseData response = (FetchQuorumRecordsResponseData) raftMessage.data();
-
-        assertEquals(Errors.NONE, Errors.forCode(response.errorCode()));
-        assertEquals(lastFetchedEpoch, response.leaderEpoch());
-        assertEquals(highWatermark, response.highWatermark());
-    }
-
-    private FetchQuorumRecordsResponseData fetchRecordsResponse(
+    private FetchResponseData fetchResponse(
         int epoch,
         int leaderId,
         Records records,
         long highWatermark,
         Errors error
-    ) throws IOException {
-        return new FetchQuorumRecordsResponseData()
+    ) {
+        return RaftUtil.singletonFetchResponse(METADATA_PARTITION, Errors.NONE, partitionData -> {
+            FetchResponseData.PartitionHeader header = partitionData.partitionHeader()
                 .setErrorCode(error.code())
-                .setHighWatermark(highWatermark)
+                .setHighWatermark(highWatermark);
+
+            header.currentLeader()
                 .setLeaderEpoch(epoch)
-                .setLeaderId(leaderId)
-                .setRecords(RaftUtil.serializeRecords(records));
+                .setLeaderId(leaderId);
+
+            partitionData.setRecordSet(records);
+        });
     }
 
-    private FetchQuorumRecordsResponseData outOfRangeFetchRecordsResponse(
+    private FetchResponseData outOfRangeFetchRecordsResponse(
         int epoch,
         int leaderId,
         long nextFetchOffset,
         int nextFetchEpoch,
         long highWatermark
     ) {
-        return new FetchQuorumRecordsResponseData()
-            .setErrorCode(Errors.NONE.code())
-            .setHighWatermark(highWatermark)
-            .setNextFetchOffset(nextFetchOffset)
-            .setNextFetchOffsetEpoch(nextFetchEpoch)
-            .setLeaderEpoch(epoch)
-            .setLeaderId(leaderId)
-            .setRecords(ByteBuffer.wrap(new byte[0]));
+        return RaftUtil.singletonFetchResponse(METADATA_PARTITION, Errors.NONE, partitionData -> {
+            FetchResponseData.PartitionHeader header = partitionData.partitionHeader()
+                .setErrorCode(Errors.NONE.code())
+                .setHighWatermark(highWatermark);
+
+            header.currentLeader()
+                .setLeaderEpoch(epoch)
+                .setLeaderId(leaderId);
+
+            header.nextOffsetAndEpoch()
+                .setNextFetchOffset(nextFetchOffset)
+                .setNextFetchOffsetEpoch(nextFetchEpoch);
+        });
     }
 
     private VoteResponseData voteResponse(boolean voteGranted, Optional<Integer> leaderId, int epoch) {
@@ -2136,19 +2160,22 @@ public class KafkaRaftClientTest {
         return raftMessage.correlationId();
     }
 
-    private FetchQuorumRecordsRequestData fetchQuorumRecordsRequest(
+    private FetchRequestData fetchQuorumRecordsRequest(
         int epoch,
         int replicaId,
         long fetchOffset,
         int lastFetchedEpoch,
         int maxWaitTimeMs
     ) {
-        return new FetchQuorumRecordsRequestData()
-            .setLeaderEpoch(epoch)
-            .setFetchOffset(fetchOffset)
-            .setLastFetchedEpoch(lastFetchedEpoch)
-            .setReplicaId(replicaId)
-            .setMaxWaitTimeMs(maxWaitTimeMs);
+        FetchRequestData request = RaftUtil.singletonFetchRequest(METADATA_PARTITION, fetchPartition -> {
+            fetchPartition
+                .setCurrentLeaderEpoch(epoch)
+                .setLastFetchedEpoch(lastFetchedEpoch)
+                .setFetchOffset(fetchOffset);
+        });
+        return request
+            .setMaxWaitMs(maxWaitTimeMs)
+            .setReplicaId(replicaId);
     }
 
     private BeginQuorumEpochResponseData beginQuorumEpochResponse(int epoch, int leaderId) {

@@ -30,7 +30,10 @@ import org.apache.kafka.raft.FuturePurgatory
  * Simple purgatory shim for integration with the Raft library. We assume that
  * both [[await()]] and [[complete()]] are called in the same thread.
  */
-class KafkaFuturePurgatory[T <: Comparable[T]](brokerId: Int, timer: Timer, reaperEnabled: Boolean = true)
+class KafkaFuturePurgatory[T <: Comparable[T]](brokerId: Int,
+                                               timer: Timer,
+                                               reaperEnabled: Boolean = true,
+                                               completionCheckStopEarly: Boolean = false)
   extends FuturePurgatory[T] with Logging {
 
   private val key = new Object()
@@ -56,7 +59,7 @@ class KafkaFuturePurgatory[T <: Comparable[T]](brokerId: Int, timer: Timer, reap
     thresholdValue.set(value)
     completionTime.set(currentTime)
     completionException.set(null)
-    purgatory.checkAndComplete(key, stopEarly = true)
+    purgatory.checkAndComplete(key, completionCheckStopEarly)
   }
 
   override def completeExceptionally(value: T, exception: Throwable): Unit = {
@@ -71,7 +74,7 @@ class KafkaFuturePurgatory[T <: Comparable[T]](brokerId: Int, timer: Timer, reap
 
 
   override def numWaiting(): Int = {
-    purgatory.watched
+    purgatory.numDelayed
   }
 
   private class DelayedRaftRequest(future: CompletableFuture[lang.Long], value: T, delayMs: Long)

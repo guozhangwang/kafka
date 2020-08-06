@@ -196,13 +196,12 @@ class RaftServer(val config: KafkaConfig,
 
     val fetchPurgatory = new KafkaFuturePurgatory[lang.Long](
       config.brokerId,
-      new SystemTimer("raft-fetch-purgatory-reaper"),
-      reaperEnabled = true)
+      new SystemTimer("raft-fetch-purgatory-reaper"))
 
     val appendPurgatory = new KafkaFuturePurgatory[lang.Long](
       config.brokerId,
       new SystemTimer("raft-append-purgatory-reaper"),
-      reaperEnabled = true)
+      completionCheckStopEarly = true)
 
     new KafkaRaftClient(
       raftConfig,
@@ -261,6 +260,8 @@ class RaftServer(val config: KafkaConfig,
       Selectable.USE_DEFAULT_BUFFER_SIZE,
       config.socketReceiveBufferBytes,
       raftConfig.requestTimeoutMs,
+      config.connectionSetupTimeoutMs,
+      config.connectionSetupTimeoutMaxMs,
       ClientDnsLookup.USE_ALL_DNS_IPS,
       time,
       discoverBrokerVersions,
@@ -349,7 +350,7 @@ object RaftServer extends Logging {
       val ackMode = AckMode.forConfig(serverProps.getProperty("ack.mode"))
       val server = new RaftServer(config, ackMode, verbose)
 
-      Exit.addShutdownHook("raft-shutdown-hook", server.shutdown)
+      Exit.addShutdownHook("raft-shutdown-hook", server.shutdown())
 
       server.startup()
       server.awaitShutdown()

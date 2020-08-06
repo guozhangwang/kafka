@@ -21,6 +21,7 @@ import org.apache.kafka.common.utils.MockTime;
 import org.junit.Test;
 
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutionException;
 
 import static org.apache.kafka.test.TestUtils.assertFutureThrows;
 import static org.junit.Assert.assertEquals;
@@ -60,11 +61,11 @@ public class MockFuturePurgatoryTest {
 
         assertEquals(0, purgatory.numWaiting());
         assertTrue(future1.isDone());
-        Throwable thrown1 = assertThrows(Throwable.class, future1::get);
-        assertEquals(exception, thrown1);
+        ExecutionException thrown1 = assertThrows(ExecutionException.class, future1::get);
+        assertEquals(exception, thrown1.getCause());
         assertTrue(future2.isDone());
-        Throwable thrown2 = assertThrows(Throwable.class, future2::get);
-        assertEquals(exception, thrown2);
+        ExecutionException thrown2 = assertThrows(ExecutionException.class, future2::get);
+        assertEquals(exception, thrown2.getCause());
     }
 
     @Test
