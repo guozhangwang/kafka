@@ -123,7 +123,6 @@ import static org.apache.kafka.raft.RaftUtil.hasValidTopicPartition;
  */
 public class KafkaRaftClient implements RaftClient {
     private final static int RETRY_BACKOFF_BASE_MS = 100;
-    private final static int MAX_APPENDS_PER_ITERATION = 10;
 
     private final AtomicReference<GracefulShutdown> shutdown = new AtomicReference<>();
     private final Logger logger;
@@ -243,7 +242,7 @@ public class KafkaRaftClient implements RaftClient {
     private void applyCommittedRecordsToStateMachine() {
         quorum.highWatermark().ifPresent(highWatermark -> {
             log.updateHighWatermark(highWatermark);
-            maybeCommitPendingAppends(highWatermark, time.milliseconds());
+            appendPurgatory.complete(highWatermark.offset, time.milliseconds());
 
             logger.debug("Applying committed entries up to high watermark {}. " +
                 "Current position is {}", highWatermark, stateMachine.position());
@@ -261,10 +260,6 @@ public class KafkaRaftClient implements RaftClient {
         });
     }
 
-    private void maybeCommitPendingAppends(LogOffsetMetadata highWatermark, long currentTimeMs) {
-        appendPurgatory.complete(highWatermark.offset, currentTimeMs);
-    }
-
     private void updateFollowerHighWatermark(FollowerState state, OptionalLong highWatermarkOpt) {
         highWatermarkOpt.ifPresent(highWatermark -> {
             long newHighWatermark = Math.min(endOffset().offset, highWatermark);
@@ -275,8 +270,8 @@ public class KafkaRaftClient implements RaftClient {
     }
 
     private void updateLeaderEndOffsetAndTimestamp(LeaderState state) {
-        final long currentTime = time.milliseconds();
-        if (state.updateLocalState(currentTime,
+        final long currentTimeMs = time.milliseconds();
+        if (state.updateLocalState(currentTimeMs,
             this::resetFetchTimeout,
             log.endOffset())) {
             logger.debug("Leader high watermark updated to {} after end offset updated to {}",
@@ -286,7 +281,7 @@ public class KafkaRaftClient implements RaftClient {
 
         // We may have pending fetches that can be completed by the advancement
         // of the log end offset
-        fetchPurgatory.complete(log.endOffset().offset, currentTime);
+        fetchPurgatory.complete(log.endOffset().offset, currentTimeMs);
     }
 
     private void updateReplicaEndOffset(LeaderState state, int replicaId, LogOffsetMetadata endOffsetMetadata) {
@@ -428,7 +423,7 @@ public class KafkaRaftClient implements RaftClient {
 
         // After becoming a follower, we need to complete all pending fetches so that
         // they can be resent to the leader without waiting for their expiration
-        fetchPurgatory.completeExceptionally(Long.MAX_VALUE, new NotLeaderOrFollowerException("Cannot process " +
+        fetchPurgatory.completeAllExceptionally(new NotLeaderOrFollowerException("Cannot process " +
                 "the fetch request because the node is no longer the leader."));
 
         for (UnwrittenAppend unwrittenAppend: unwrittenAppends) {
@@ -440,7 +435,7 @@ public class KafkaRaftClient implements RaftClient {
         unwrittenAppends.clear();
 
         // Clearing the append purgatory should complete all future exceptionally since this node is no longer the leader
-        appendPurgatory.completeExceptionally(Long.MAX_VALUE, new NotLeaderOrFollowerException("Failed to receive " +
+        appendPurgatory.completeAllExceptionally(new NotLeaderOrFollowerException("Failed to receive " +
                 "sufficient acknowledgments for this append before leader change."));
 
         logger.info("{} become a {} for epoch {}", quorum.localId, quorum.isVoter() ? "follower" : "observer", quorum.epoch());
@@ -1588,11 +1583,13 @@ public class KafkaRaftClient implements RaftClient {
 
     private void handlePendingAppends(long currentTimeMs) {
         if (quorum.isLeader()) {
-            int count = 0;
-            while (!unwrittenAppends.isEmpty() && count < MAX_APPENDS_PER_ITERATION) {
+            int numAppends = 0;
+            int maxNumAppends = unwrittenAppends.size();
+
+            while (!unwrittenAppends.isEmpty() && numAppends < maxNumAppends) {
                 final UnwrittenAppend unwrittenAppend = unwrittenAppends.poll();
 
-                if (unwrittenAppend.isCancelled())
+                if (unwrittenAppend.future.isDone())
                     continue;
 
                 if (unwrittenAppend.isTimedOut(currentTimeMs)) {
@@ -1617,12 +1614,13 @@ public class KafkaRaftClient implements RaftClient {
                                     unwrittenAppend.fail(exception);
                                 } else {
                                     long elapsedTime = Math.max(0, completionTimeMs - currentTimeMs);
-                                    long records = info.lastOffset - info.firstOffset + 1;
-                                    double elapsedTimePerRecord = (double) elapsedTime / records;
+                                    long numCommittedRecords = info.lastOffset - info.firstOffset + 1;
+                                    double elapsedTimePerRecord = (double) elapsedTime / numCommittedRecords;
                                     kafkaRaftMetrics.updateCommitLatency(elapsedTimePerRecord, currentTimeMs);
                                     unwrittenAppend.complete(offsetAndEpoch);
 
-                                    logger.debug("Completed committing append with {} records at {}", records, offsetAndEpoch);
+                                    logger.debug("Completed committing append with {} records at {}",
+                                        numCommittedRecords, offsetAndEpoch);
                                 }
                             });
                         }
@@ -1631,11 +1629,11 @@ public class KafkaRaftClient implements RaftClient {
                     }
                 }
 
-                count++;
+                numAppends++;
             }
         } else {
             for (UnwrittenAppend unwrittenAppend : unwrittenAppends) {
-                if (!unwrittenAppend.isCancelled()) {
+                if (!unwrittenAppend.future.isDone()) {
                     unwrittenAppend.fail(new NotLeaderOrFollowerException("Append refused since this node is no longer " +
                             "the leader"));
                 }
@@ -1772,10 +1770,6 @@ public class KafkaRaftClient implements RaftClient {
 
         public boolean isTimedOut(long currentTimeMs) {
             return currentTimeMs > createTimeMs + requestTimeoutMs;
-        }
-
-        public boolean isCancelled() {
-            return future.isCancelled();
         }
     }
 }

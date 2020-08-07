@@ -57,7 +57,7 @@ public class MockFuturePurgatoryTest {
         assertEquals(2, purgatory.numWaiting());
 
         Throwable exception = new Throwable();
-        purgatory.completeExceptionally(3L, exception);
+        purgatory.completeAllExceptionally(exception);
 
         assertEquals(0, purgatory.numWaiting());
         assertTrue(future1.isDone());

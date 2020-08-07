@@ -173,9 +173,6 @@
 
     <suppress checks="ImportControl" files="FetchResponseData.java"/>
 
-    <suppress checks="(NPathComplexity|ClassFanOutComplexity|CyclomaticComplexity|ClassDataAbstractionCoupling|FinalLocalVariable|LocalVariableName|MemberName|ParameterName|MethodLength|JavaNCSS)"
-              files="raft[\\/]src[\\/](generated|generated-test)[\\/].+.java$"/>
-
     <!-- Streams tests -->
     <suppress checks="ClassFanOutComplexity"
               files="StreamThreadTest.java"/>

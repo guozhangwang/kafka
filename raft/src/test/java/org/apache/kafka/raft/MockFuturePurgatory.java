@@ -53,14 +53,10 @@ public class MockFuturePurgatory<T extends Comparable<T>> implements FuturePurga
     }
 
     @Override
-    public void completeExceptionally(T value, Throwable exception) {
+    public void completeAllExceptionally(Throwable exception) {
         while (!delayedFutures.isEmpty()) {
-            if (delayedFutures.peek().id.compareTo(value) < 0) {
-                DelayedFuture delayedFuture = delayedFutures.poll();
-                delayedFuture.future.completeExceptionally(exception);
-            } else {
-                break;
-            }
+            DelayedFuture delayedFuture = delayedFutures.poll();
+            delayedFuture.future.completeExceptionally(exception);
         }
     }
 

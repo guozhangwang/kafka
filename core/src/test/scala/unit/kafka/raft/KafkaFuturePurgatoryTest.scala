@@ -101,7 +101,7 @@ class KafkaFuturePurgatoryTest {
     assertEquals(3, purgatory.numWaiting())
 
     val exception = new Throwable("kaboom")
-    purgatory.completeExceptionally(4, exception)
+    purgatory.completeAllExceptionally(exception)
 
     assertTrue(future1.isDone)
     assertThrows[ExecutionException] {

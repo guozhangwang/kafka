@@ -59,10 +59,9 @@ public interface FuturePurgatory<T extends Comparable<T>> {
      * Complete awaiting futures whose associated values are larger than the given threshold value exceptionally.
      * The completion callbacks will be triggered with the passed in exception.
      *
-     * @param value         the threshold value used to determine which futures can be completed
      * @param exception     the current time in milliseconds that will be passed to {@link CompletableFuture#completeExceptionally(Throwable)}
      */
-    void completeExceptionally(T value, Throwable exception);
+    void completeAllExceptionally(Throwable exception);
 
     /**
      * The number of currently waiting futures.

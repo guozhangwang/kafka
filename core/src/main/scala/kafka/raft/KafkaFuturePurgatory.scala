@@ -32,8 +32,7 @@ import org.apache.kafka.raft.FuturePurgatory
  */
 class KafkaFuturePurgatory[T <: Comparable[T]](brokerId: Int,
                                                timer: Timer,
-                                               reaperEnabled: Boolean = true,
-                                               completionCheckStopEarly: Boolean = false)
+                                               reaperEnabled: Boolean = true)
   extends FuturePurgatory[T] with Logging {
 
   private val key = new Object()
@@ -47,8 +46,8 @@ class KafkaFuturePurgatory[T <: Comparable[T]](brokerId: Int,
   override def await(value: T, maxWaitTimeMs: Long): CompletableFuture[lang.Long] = {
     val future: CompletableFuture[lang.Long] = new CompletableFuture[lang.Long]()
     val op = new DelayedRaftRequest(future, value, maxWaitTimeMs)
+    completionException.set(null)
     purgatory.tryCompleteElseWatch(op, Seq(key))
-
     future
   }
 
@@ -59,17 +58,16 @@ class KafkaFuturePurgatory[T <: Comparable[T]](brokerId: Int,
     thresholdValue.set(value)
     completionTime.set(currentTime)
     completionException.set(null)
-    purgatory.checkAndComplete(key, completionCheckStopEarly)
+    purgatory.checkAndComplete(key)
   }
 
-  override def completeExceptionally(value: T, exception: Throwable): Unit = {
+  override def completeAllExceptionally(exception: Throwable): Unit = {
     // all delayed request equal or smaller than the complete value can be completed
     // we assume the futures are added to the watcher list in order of the value so
     // we can stop early if the completion check failed
-    thresholdValue.set(value)
     completionTime.set(-1)
     completionException.set(exception)
-    purgatory.checkAndComplete(key, stopEarly = true)
+    purgatory.checkAndComplete(key)
   }
 
 
@@ -98,12 +96,15 @@ class KafkaFuturePurgatory[T <: Comparable[T]](brokerId: Int,
     }
 
     override def tryComplete(): Boolean = {
-      if (thresholdValue.get() == null)
-        return false
-
-      // the request is completable if its future result
-      // is smaller than the complete value
-      thresholdValue.get().compareTo(value) > 0 && forceComplete()
+      if (completionException.get() != null) {
+        forceComplete()
+      } else if (thresholdValue.get() == null) {
+        false
+      } else {
+        // the request is completable if its future result
+        // is smaller than the complete value
+        thresholdValue.get().compareTo(value) > 0 && forceComplete()
+      }
     }
 
     override def run(): Unit = {

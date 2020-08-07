@@ -200,8 +200,7 @@ class RaftServer(val config: KafkaConfig,
 
     val appendPurgatory = new KafkaFuturePurgatory[lang.Long](
       config.brokerId,
-      new SystemTimer("raft-append-purgatory-reaper"),
-      completionCheckStopEarly = true)
+      new SystemTimer("raft-append-purgatory-reaper"))
 
     new KafkaRaftClient(
       raftConfig,
